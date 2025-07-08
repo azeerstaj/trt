@@ -75,7 +75,7 @@ def generate_anchors_single_pytorch(img_h, img_w, feat_h, feat_w, sizes, aspect_
 # Example usage
 if __name__ == "__main__":
     # Test parameters
-    image_height, image_width = 800, 800
+    image_height, image_width = 800, 600
     feature_height, feature_width = 20, 20
 
     sizes = [[32], [64], [128]]
