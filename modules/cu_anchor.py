@@ -112,5 +112,6 @@ if __name__ == "__main__":
         image_height, image_width, feature_map_shapes, sizes, aspect_ratios
     )
     
-    print(f"Generated {anchors_cuda.shape[0]} anchors")
+    # print(f"Generated {anchors_cuda.shape[0]} anchors")
+    print(f"Output Shapes: {anchors_cuda.shape}")
     print(f"First 5 anchors:\n{anchors_cuda[:5]}")
