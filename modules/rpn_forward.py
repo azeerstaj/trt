@@ -1,12 +1,12 @@
 import math
 import torch
 from torch import Tensor
-from torchvision_utils import (
-    clip_boxes_to_image, remove_small_boxes,
+from .torchvision_utils import (
+    clip_boxes_to_image,
+    remove_small_boxes,
     batched_nms
 )
 from collections import namedtuple
-
 
 # def rpn_head_forward(features):
 #     for feature in features:
@@ -14,6 +14,38 @@ from collections import namedtuple
 #         logits.append(self.cls_logits(t))
 #         bbox_reg.append(self.bbox_pred(t))
 #     return logits, bbox_reg
+
+"""
+def estimate_rpn_output_shape(features: dict, num_anchors_per_location: int, batch_size: int, post_nms_top_n: int):
+    feature_shapes = [feat.shape for feat in features.values()]
+    total_anchors = sum(num_anchors_per_location * H * W for (_, _, H, W) in feature_shapes)
+    max_boxes_per_image = post_nms_top_n
+    return (batch_size, max_boxes_per_image, 4)
+"""
+
+def estimate_rpn_proposal_counts(features, A: int = 3, pre_nms_top_n: int = 1000, post_nms_top_n: int = 1000) -> dict:
+    feature_shapes = [feat.shape for feat in features]
+    
+    total_raw_anchors = sum(A * H * W for _, _, H, W in feature_shapes)
+    approx_topk_total = sum(min(pre_nms_top_n, A * H * W) for _, _, H, W in feature_shapes)
+
+    # Estimate drops
+    after_score_thresh = int(approx_topk_total * 0.5)   # e.g., 50% filtered out
+    after_nms = int(after_score_thresh * 0.5)           # e.g., 50% drop due to NMS
+
+    expected = min(after_nms, post_nms_top_n)
+    max_proposals = post_nms_top_n
+    min_proposals = 0  # Worst case
+
+    return {
+        "min": min_proposals,
+        "expected": expected,
+        "max": max_proposals,
+        "raw_anchors": total_raw_anchors,
+        "topk_before_nms": approx_topk_total,
+    }
+ 
+
 
 def permute_and_flatten(layer: Tensor, N: int, A: int, C: int, H: int, W: int) -> Tensor:
     layer = layer.view(N, -1, C, H, W)
@@ -139,7 +171,7 @@ def decode_single(rel_codes: Tensor, boxes: Tensor, weights=(1.0, 1.0, 1.0, 1.0)
 def decode(rel_codes: Tensor, boxes: list[Tensor]) -> Tensor:
     torch._assert(
         isinstance(boxes, (list, tuple)),
-        "This function expects boxes of type list or tuple.",
+        f"This function expects boxes of type list or tuple, not {type(boxes)}",
     )
     torch._assert(
         isinstance(rel_codes, torch.Tensor),
@@ -264,19 +296,11 @@ def filter_proposals(
 
 def rpn_forward(images, features, anchors, objectness, pred_bbox_deltas):
     # RPN uses all feature maps that are available
-    features = list(features.values())
-    
-    ## We are getting them from outside instead.
-    # objectness, pred_bbox_deltas = head(features)
-    # anchors = anchor_forward(images, features)
-
+    # features = list(features.values())
     num_images = len(anchors)
     num_anchors_per_level_shape_tensors = [o[0].shape for o in objectness]
     num_anchors_per_level = [s[0] * s[1] * s[2] for s in num_anchors_per_level_shape_tensors]
     objectness, pred_bbox_deltas = concat_box_prediction_layers(objectness, pred_bbox_deltas)
-    # apply pred_bbox_deltas to anchors to obtain the decoded proposals
-    # note that we detach the deltas because Faster R-CNN do not backprop through
-    # the proposals
     proposals = decode(pred_bbox_deltas.detach(), anchors)
     proposals = proposals.view(num_images, -1, 4)
     boxes, scores = filter_proposals(proposals, objectness, images.image_sizes, num_anchors_per_level)
@@ -291,18 +315,18 @@ if __name__ == "__main__":
     images = ImageList(tensors=image_tensor, image_sizes=[image_size])
 
     # Simulate features from 3 FPN levels
-    features = {
-        "0": torch.randn(batch_size, 256, 50, 50),
-        "1": torch.randn(batch_size, 256, 25, 25),
-        "2": torch.randn(batch_size, 256, 13, 13),
-    }
+    features = [
+        torch.randn(batch_size, 256, 50, 50),
+        torch.randn(batch_size, 256, 25, 25),
+        torch.randn(batch_size, 256, 13, 13),
+    ]
 
     # Assume 3 anchors per spatial location
     num_anchors = 3
     objectness = []
     pred_bbox_deltas = []
 
-    for feat in features.values():
+    for feat in features:
         N, C, H, W = feat.shape
         objectness.append(torch.randn(N, num_anchors, H, W))
         pred_bbox_deltas.append(torch.randn(N, num_anchors * 4, H, W))
@@ -311,7 +335,7 @@ if __name__ == "__main__":
     anchors = []
     for _ in range(batch_size):
         all_anchors = []
-        for feat in features.values():
+        for feat in features:
             _, _, H, W = feat.shape
             A = num_anchors
             total = H * W * A
@@ -321,6 +345,10 @@ if __name__ == "__main__":
 
     # Run RPN forward
     proposals = rpn_forward(images, features, anchors, objectness, pred_bbox_deltas)
+    estimates = estimate_rpn_proposal_counts(features)   
+    print(estimates)
+
+    print("Total Proposals:", len(proposals))
 
     for i, (boxes_per_image) in enumerate(proposals):
         print(f"Image {i}: {len(boxes_per_image)} proposals")
