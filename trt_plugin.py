@@ -22,20 +22,17 @@ class AnchorGenPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         self.plugin_name = plugin_name
         self.plugin_version = "1"
         self.cuDevice = None
-        # self.sizes  = np.array(((32, 64, 128, 256, 512,),) * 3, dtype=np.uint64)
-        # self.ratios = np.array(((0.5, 1.0, 2.0),) * len(self.sizes), dtype=np.uint64)
-
         self.sizes = [[32], [64], [128]]
         self.aspect_ratios = [[0.5, 1.0, 2.0], [0.5, 1.0, 2.0], [0.5, 1.0, 2.0]]
 
 
     def get_capability_interface(self, type):
-        print("Capability")
+        # print("Capability")
         return self
 
     # Return Data Type
     def get_output_data_types(self, input_types):
-        print("Output dtypes")
+        # print("Output dtypes")
         return [trt.DataType.FLOAT]
 
     # inputs : shape of inputs
@@ -48,33 +45,26 @@ class AnchorGenPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
 
         output_dims[0][0] = total_output_anchors
         output_dims[0][1] = exprBuilder.constant(4)
-        print("Total Output Anchors:", total_output_anchors.get_constant_value())
         return output_dims
 
     # plugin input params, custom backend?
     def get_fields_to_serialize(self):
-        return trt.PluginFieldCollection(
-            [
-                # trt.PluginField(
-                #    "sizes", self.sizes, trt.PluginFieldType.CHAR
-                # )
-            ]
-        )
+        return trt.PluginFieldCollection([])
 
     # depending on the plugin field, configure plugin
     def configure_plugin(self, inp, out):
-        print("Configure plugin")
+        # print("Configure plugin")
         err, self.cuDevice = cuda.cuDeviceGet(0)
 
     # called when executing
     def on_shape_change(self, inp, out):
-        print("On shape change")
+        # print("On shape change")
         err, self.cuDevice = cuda.cuDeviceGet(0)
 
 
     # Return true if plugin supports the format and datatype for the input/output indexed by pos.
     def supports_format_combination(self, pos, in_out, num_inputs):
-        print("Support Combination")
+        # print("Support Combination")
         return num_inputs == 2
 
     # The executed function when the plugin is called
@@ -113,24 +103,8 @@ class AnchorGenPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
 
         imgs_t = torch.as_tensor(imgs_d, device="cuda")
         fmaps_t = torch.as_tensor(fmaps_d, device="cuda")
-        # anchors_t = torch.as_tensor(anchors_d, device="cuda")
         print("Torch populated.")
-
-        img_height = imgs_t.shape[-2]
-        img_width = imgs_t.shape[-1]
-        # feature_map_shapes = [m.shape[-2:] for m in fmaps_t]
-        feature_map_shapes = [fmaps_t.shape[-2], fmaps_t.shape[-1]]
-
-        print("Image Height:", img_height)
-        print("Image Width :", img_width)
-        # print("Feature Maps:", fmaps_t)
-        print("Feature Maps:", feature_map_shapes)
         out = anchor_forward(imgs_t, fmaps_t, self.sizes, self.aspect_ratios).view(-1)
-        # print(out)
-        # out = torch.nn.functional.pad(a_t, self.pads.tolist(), mode="circular")
-        #cp.copyto(anchors_d, cp.reshape(cp.asarray(out), (-1,)))
-
-        print("Shape:", out.shape)
         cp.copyto(anchors_d, cp.asarray(out))
 
         return 0
@@ -146,17 +120,6 @@ class AnchorGenPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         cloned_plugin = AnchorGenPlugin()
         cloned_plugin.__dict__.update(self.__dict__)
         return cloned_plugin
-
-    # The following defaults take effect since the respective methods are not overriden
-
-    # def get_valid_tactics(self):
-    #     return []
-
-    # def get_workspace_size(self, input_desc, output_desc):
-    #     return 0
-
-    # def destroy(self):
-    #     pass
 
     def preprocess_input(self, image_height, image_width, feature_map_shapes, sizes, aspect_ratios):
         """
@@ -235,18 +198,13 @@ if __name__ == "__main__":
     # Create context
     _, cudaCtx = cuda.cuCtxCreate(0, cuDevice)
 
-
     precision = np.float32
-
 
     image_shape = [1, 3, 800, 800]
     f1_shape = [1, 256, 50, 50]
 
     images = torch.randn(image_shape)
     f1 = torch.randn(f1_shape)
-
-    # sizes = [[32], [64], [128]]
-    # ratios = [[0.5, 1.0, 2.0], [0.5, 1.0, 2.0], [0.5, 1.0, 2.0]]
 
     # Register plugin creator
     plg_registry = trt.get_plugin_registry()
@@ -257,40 +215,27 @@ if __name__ == "__main__":
     builder, network = create_network()
     plg_creator = plg_registry.get_creator(plugin_name, "1", "")
     
-    plugin_fields_list = [
-        #trt.PluginField("backend", args.backend.encode(), trt.PluginFieldType.CHAR)
-    ]
+    plugin_fields_list = []
 
     pfc = trt.PluginFieldCollection(plugin_fields_list)
     plugin = plg_creator.create_plugin(plugin_name, pfc, trt.TensorRTPhase.BUILD)
 
     # Populate network
-    inputX = network.add_input(name="image", dtype=trt.DataType.FLOAT, shape=trt.Dims(image_shape))#if precision==np.float32 else trt.float16, shape=inp_shape)
-    inputY = network.add_input(name="fmaps", dtype=trt.DataType.FLOAT, shape=trt.Dims(f1_shape))#if precision==np.float32 else trt.float16, shape=inp_shape)
+    inputX = network.add_input(name="image", dtype=trt.DataType.FLOAT, shape=trt.Dims(image_shape))
+    inputY = network.add_input(name="fmaps", dtype=trt.DataType.FLOAT, shape=trt.Dims(f1_shape))
 
     out = network.add_plugin_v3([inputX, inputY], [], plugin)
     out.get_output(0).name = "anchors"
     network.mark_output(tensor=out.get_output(0))
     build_engine = engine_from_network((builder, network), CreateConfig(fp16= True if precision == np.float16 else False))
-    # exit(0)
 
     fmaps = np.random.random(f1_shape).astype(numpy_dtype)
     image = np.random.random(image_shape).astype(numpy_dtype)
 
-    # Compare against Numpy's nonzero
-    # Y_ref = None #np.transpose(np.nonzero(X))
-
-    # Run
 
     with TrtRunner(build_engine, "trt_runner")as runner:
         outputs = runner.infer({"image": image, "fmaps":fmaps})['anchors']
         print("Outputs Shape:", outputs.shape)
         print("Outputs:", outputs[:10])
-        # Y = outputs["Y"]
-
-        # if np.allclose(Y, Y_ref):
-        #     print("Inference result correct!")
-        # else:
-        #     print("Inference result incorrect!")
 
     checkCudaErrors(cuda.cuCtxDestroy(cudaCtx))
