@@ -21,6 +21,7 @@ cudart = mod.lazy_import("cuda.cudart")
 nvrtc = mod.lazy_import("cuda.nvrtc")
 
 torch = mod.lazy_import("torch")
+torch.manual_seed(0)
 cp = mod.lazy_import("cupy")
 
 def volume(d):

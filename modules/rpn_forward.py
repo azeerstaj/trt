@@ -8,6 +8,8 @@ from .torchvision_utils import (
 )
 from collections import namedtuple
 
+torch.manual_seed(0)
+
 # def rpn_head_forward(features):
 #     for feature in features:
 #         t = self.conv(feature)
@@ -46,11 +48,13 @@ def estimate_rpn_proposal_counts(features, A: int = 3, pre_nms_top_n: int = 1000
     }
  
 
-
 def permute_and_flatten(layer: Tensor, N: int, A: int, C: int, H: int, W: int) -> Tensor:
-    layer = layer.view(N, -1, C, H, W)
+    print(f"[permute_and_flatten] input: {layer.shape}")
+    # print("")
+    layer = layer.view(N, -1, C, H, W) # BUG
     layer = layer.permute(0, 3, 4, 1, 2)
     layer = layer.reshape(N, -1, C)
+    print(f"[permute_and_flatten] output: {layer.shape}")
     return layer
 
 def encode_boxes(reference_boxes: Tensor, proposals: Tensor, weights: Tensor) -> Tensor:
@@ -63,6 +67,8 @@ def encode_boxes(reference_boxes: Tensor, proposals: Tensor, weights: Tensor) ->
         proposals (Tensor): boxes to be encoded
         weights (Tensor[4]): the weights for ``(x, y, w, h)``
     """
+    print(f"[encode_boxes] reference_boxes: {reference_boxes.shape}, proposals: {proposals.shape}")
+
 
     # perform some unpacking to make it JIT-fusion friendly
     wx = weights[0]
@@ -97,6 +103,7 @@ def encode_boxes(reference_boxes: Tensor, proposals: Tensor, weights: Tensor) ->
     targets_dh = wh * torch.log(gt_heights / ex_heights)
 
     targets = torch.cat((targets_dx, targets_dy, targets_dw, targets_dh), dim=1)
+    print(f"[encode_boxes] output: {targets.shape}")
     return targets
 
 
@@ -109,17 +116,21 @@ def encode_single(reference_boxes: Tensor, proposals: Tensor, weights=(1.0, 1.0,
         reference_boxes (Tensor): reference boxes
         proposals (Tensor): boxes to be encoded
     """
+    print(f"[encode_single] input: {reference_boxes.shape}, {proposals.shape}")
     dtype = reference_boxes.dtype
     device = reference_boxes.device
     weights = torch.as_tensor(weights, dtype=dtype, device=device)
     targets = encode_boxes(reference_boxes, proposals, weights)
+    print(f"[encode_single] output: {targets.shape}")
 
     return targets
 
 def encode(reference_boxes: list[Tensor], proposals: list[Tensor]) -> list[Tensor]:
+    print(f"[encode] input: {len(reference_boxes)} images")
     boxes_per_image = [len(b) for b in reference_boxes]
     reference_boxes = torch.cat(reference_boxes, dim=0)
     proposals = torch.cat(proposals, dim=0)
+    # print(f"[encode] cat reference: {proposals.shape}, cat proposals: {proposals_cat.shape}")
     targets = encode_single(reference_boxes, proposals)
     return targets.split(boxes_per_image, 0)
 
@@ -133,6 +144,7 @@ def decode_single(rel_codes: Tensor, boxes: Tensor, weights=(1.0, 1.0, 1.0, 1.0)
         rel_codes (Tensor): encoded boxes
         boxes (Tensor): reference boxes.
     """
+    print(f"[decode_single] input: rel_codes={rel_codes.shape}, boxes={boxes.shape}")
 
     boxes = boxes.to(rel_codes.dtype)
 
@@ -165,6 +177,7 @@ def decode_single(rel_codes: Tensor, boxes: Tensor, weights=(1.0, 1.0, 1.0, 1.0)
     pred_boxes3 = pred_ctr_x + c_to_c_w
     pred_boxes4 = pred_ctr_y + c_to_c_h
     pred_boxes = torch.stack((pred_boxes1, pred_boxes2, pred_boxes3, pred_boxes4), dim=2).flatten(1)
+    print(f"[decode_single] output: {pred_boxes.shape}")
     return pred_boxes
 
 
@@ -177,6 +190,7 @@ def decode(rel_codes: Tensor, boxes: list[Tensor]) -> Tensor:
         isinstance(rel_codes, torch.Tensor),
         "This function expects rel_codes of type torch.Tensor.",
     )
+    print(f"[decode] input: rel_codes={rel_codes.shape}, {len(boxes)} boxes")
     boxes_per_image = [b.size(0) for b in boxes]
     concat_boxes = torch.cat(boxes, dim=0)
     box_sum = 0
@@ -184,13 +198,16 @@ def decode(rel_codes: Tensor, boxes: list[Tensor]) -> Tensor:
         box_sum += val
     if box_sum > 0:
         rel_codes = rel_codes.reshape(box_sum, -1)
+    print(f"[decode] concat_boxes: {concat_boxes.shape}, reshaped rel_codes: {rel_codes.shape}")
     pred_boxes = decode_single(rel_codes, concat_boxes)
     if box_sum > 0:
         pred_boxes = pred_boxes.reshape(box_sum, -1, 4)
+    print(f"[decode] output: {pred_boxes.shape}")
     return pred_boxes
 
 
 def concat_box_prediction_layers(box_cls: list[Tensor], box_regression: list[Tensor]) -> tuple[Tensor, Tensor]:
+    print(f"[concat_box_prediction_layers] input: {len(box_cls)} levels")
     box_cls_flattened = []
     box_regression_flattened = []
     # for each feature level, permute the outputs to make them be in the
@@ -198,10 +215,21 @@ def concat_box_prediction_layers(box_cls: list[Tensor], box_regression: list[Ten
     # all feature levels concatenated, so we keep the same representation
     # for the objectness and the box_regression
     for box_cls_per_level, box_regression_per_level in zip(box_cls, box_regression):
+        print("box cls per lvl:", box_cls_per_level.shape)
+        print("box reg per lvl:", box_regression_per_level.shape)
         N, AxC, H, W = box_cls_per_level.shape
         Ax4 = box_regression_per_level.shape[1]
         A = Ax4 // 4
         C = AxC // A
+        print("N:", N)
+        print("Ax4:", Ax4)
+        print("AxC:", AxC)
+        print("AxC // A:", AxC // A)
+        print("C:", C)
+        print("A:", A)
+        print("H:", H)
+        print("W:", W)
+        print("Box cls per lvl:", box_cls_per_level.shape)
         box_cls_per_level = permute_and_flatten(box_cls_per_level, N, A, C, H, W)
         box_cls_flattened.append(box_cls_per_level)
 
@@ -212,6 +240,7 @@ def concat_box_prediction_layers(box_cls: list[Tensor], box_regression: list[Ten
     # being concatenated as well)
     box_cls = torch.cat(box_cls_flattened, dim=1).flatten(0, -2)
     box_regression = torch.cat(box_regression_flattened, dim=1).reshape(-1, 4)
+    print(f"[concat_box_prediction_layers] output: box_cls={box_cls.shape}, box_regression={box_regression.shape}")
     return box_cls, box_regression
 
 def _topk_min(input: Tensor, orig_kval: int, axis: int) -> int:
@@ -223,6 +252,7 @@ def _topk_min(input: Tensor, orig_kval: int, axis: int) -> int:
     return min_kval
 
 def _get_top_n_idx(objectness: Tensor, num_anchors_per_level: list[int], pre_nms_top_n=1000) -> Tensor:
+    print(f"[_get_top_n_idx] input: {objectness.shape}")
     r = []
     offset = 0
     for ob in objectness.split(num_anchors_per_level, 1):
@@ -231,7 +261,9 @@ def _get_top_n_idx(objectness: Tensor, num_anchors_per_level: list[int], pre_nms
         _, top_n_idx = ob.topk(pre_nms_top_n, dim=1)
         r.append(top_n_idx + offset)
         offset += num_anchors
-    return torch.cat(r, dim=1)
+    result = torch.cat(r, dim=1)
+    print(f"[_get_top_n_idx] output: {result.shape}")
+    return result
 
 def filter_proposals(
     proposals: Tensor,
@@ -244,6 +276,8 @@ def filter_proposals(
     post_nms_top_n = 1000
 ) -> tuple[list[Tensor], list[Tensor]]:
 
+    print(f"[filter_proposals] proposals: {proposals.shape}, objectness: {objectness.shape}")
+    # print(f"[filter_proposals] proposals1:", proposals)
     num_images = proposals.shape[0]
     device = proposals.device
     # do not backprop through objectness
@@ -258,6 +292,7 @@ def filter_proposals(
 
     # select top_n boxes independently per level before applying nms
     top_n_idx = _get_top_n_idx(objectness, num_anchors_per_level)
+    print(f"[filter_proposals] top_n_idx: {top_n_idx.shape}")
 
     image_range = torch.arange(num_images, device=device)
     batch_idx = image_range[:, None]
@@ -271,39 +306,56 @@ def filter_proposals(
     final_boxes = []
     final_scores = []
     for boxes, scores, lvl, img_shape in zip(proposals, objectness_prob, levels, image_shapes):
+        print(f"[filter_proposals] before NMS: boxes={boxes.shape}, scores={scores.shape}, img_shape={img_shape}")#, level={lvl}")
+
         boxes = clip_boxes_to_image(boxes, img_shape)
+        print("[filter_proposals] boxes2:", boxes.shape)
+        print(boxes)
 
         # remove small boxes
         keep = remove_small_boxes(boxes, min_size)
+        print("[filter_proposals] len(keep1):", len(keep))
         boxes, scores, lvl = boxes[keep], scores[keep], lvl[keep]
 
         # remove low scoring boxes
         # use >= for Backwards compatibility
         keep = torch.where(scores >= score_thresh)[0]
+        print("[filter_proposals] len(keep2):", len(keep))
         boxes, scores, lvl = boxes[keep], scores[keep], lvl[keep]
 
         # non-maximum suppression, independently done per level
         keep = batched_nms(boxes, scores, lvl, nms_thresh)
+        print("[filter_proposals] len(keep3):", len(keep))
 
         # keep only topk scoring predictions
         keep = keep[: post_nms_top_n]
+        print("[filter_proposals] len(keep4):", len(keep))
         boxes, scores = boxes[keep], scores[keep]
 
         final_boxes.append(boxes)
         final_scores.append(scores)
+        print(f"[filter_proposals] after NMS: boxes={boxes.shape}")
     return final_boxes, final_scores
 
-
 def rpn_forward(images, features, anchors, objectness, pred_bbox_deltas):
-    # RPN uses all feature maps that are available
-    # features = list(features.values())
-    num_images = len(anchors)
+    print(f"[rpn_forward] features: {len(features)}, images: {len(images.image_sizes)}")
+
+    # print(f"[rpn_forward] features: {features[0]}, images: {images.tensors}")
+
     num_anchors_per_level_shape_tensors = [o[0].shape for o in objectness]
     num_anchors_per_level = [s[0] * s[1] * s[2] for s in num_anchors_per_level_shape_tensors]
+
     objectness, pred_bbox_deltas = concat_box_prediction_layers(objectness, pred_bbox_deltas)
+    print(f"[rpn_forward] objectness: {objectness.shape}, pred_bbox_deltas: {pred_bbox_deltas.shape}")
+    print(f"[rpn_forward] objectness: {objectness.dtype}, pred_bbox_deltas: {pred_bbox_deltas.dtype}")
+
     proposals = decode(pred_bbox_deltas.detach(), anchors)
-    proposals = proposals.view(num_images, -1, 4)
+    proposals = proposals.view(len(anchors), -1, 4)
+    print(f"[rpn_forward] proposals reshaped: {proposals.shape}")
+    print(f"[rpn_forward] proposals reshaped: {proposals.dtype}")
+
     boxes, scores = filter_proposals(proposals, objectness, images.image_sizes, num_anchors_per_level)
+    print(f"[rpn_forward] final boxes: {[b.shape for b in boxes]}")
     return boxes
 
 ImageList = namedtuple("ImageList", ["tensors", "image_sizes"])
@@ -317,8 +369,8 @@ if __name__ == "__main__":
     # Simulate features from 3 FPN levels
     features = [
         torch.randn(batch_size, 256, 50, 50),
-        torch.randn(batch_size, 256, 25, 25),
-        torch.randn(batch_size, 256, 13, 13),
+        # torch.randn(batch_size, 256, 25, 25),
+        # torch.randn(batch_size, 256, 13, 13),
     ]
 
     # Assume 3 anchors per spatial location
@@ -343,6 +395,15 @@ if __name__ == "__main__":
             all_anchors.append(anchors_per_feat)
         anchors.append(torch.cat(all_anchors, dim=0))
 
+    print("len(anchors):", len(anchors))
+    print("anchors[0].shape:", anchors[0].shape)
+    
+    print("len(objectness):", len(objectness))
+    print("objectness[0].shape:", objectness[0].shape)
+    
+    print("len(pred_bbox_deltas)", len(pred_bbox_deltas))
+    print("pred_bbox_deltas[0].shape", pred_bbox_deltas[0].shape)
+
     # Run RPN forward
     proposals = rpn_forward(images, features, anchors, objectness, pred_bbox_deltas)
     estimates = estimate_rpn_proposal_counts(features)   
@@ -350,6 +411,6 @@ if __name__ == "__main__":
 
     print("Total Proposals:", len(proposals))
 
-    for i, (boxes_per_image) in enumerate(proposals):
-        print(f"Image {i}: {len(boxes_per_image)} proposals")
-        print(boxes_per_image[:5])  # show top 5 proposals
+    # for i, (boxes_per_image) in enumerate(proposals):
+        # print(f"Image {i}: {len(boxes_per_image)} proposals")
+        # print(boxes_per_image[:5])  # show top 5 proposals

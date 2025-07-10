@@ -1,6 +1,7 @@
 from trt_utils import *
 # from anchor_gen import AnchorGenPluginCreator, plugin_name, numpy_dtype
 from modules.rpn_forward import rpn_forward
+from collections import namedtuple
 
 kernel_path = "modules/cuAnchor.cuh"
 
@@ -11,6 +12,7 @@ plugin_name = "RPNPlugin"
 n_outputs = 1
 numpy_dtype = np.float32
 
+ImageList = namedtuple("ImageList", ["tensors", "image_sizes"])
 class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.IPluginV3OneRuntime):
     def __init__(self):
         trt.IPluginV3.__init__(self)
@@ -116,16 +118,30 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         boxes_d = cp.ndarray((volume(output_desc[0].dims)), dtype=img_dtype, memptr=boxes_ptr)
         print("Arrays populated.")
 
-        imgs_t = torch.as_tensor(imgs_d, device="cuda")
-        fmaps_t = torch.as_tensor(fmaps_d, device="cuda")
-        anchors_t = torch.as_tensor(anchors_d, device="cuda")
-        objectness_t = torch.as_tensor(objectness_d, device="cuda")
-        proposals_t = torch.as_tensor(proposals_d, device="cuda")
+        imgs_t = torch.as_tensor(imgs_d, device="cuda")#.squeeze(0)
+        fmaps_t = torch.as_tensor(fmaps_d, device="cuda")#.squeeze(0)
+        anchors_t = torch.as_tensor(anchors_d, device="cuda").squeeze(0)
+        objectness_t = torch.as_tensor(objectness_d, device="cuda").squeeze(0)
+        proposals_t = torch.as_tensor(proposals_d, device="cuda").squeeze(0)
         # boxes_t = torch.as_tensor(boxes_d, device="cuda")
         print("Torch populated.")
 
-        out = rpn_forward(imgs_t, fmaps_t, anchors_t, objectness_t, proposals_t)
-        # cp.copyto(anchors_d, cp.asarray(out))
+        print("imgs shape:", imgs_t.shape)
+        print("fmaps shape:", fmaps_t.shape)
+        print("anchors shape:", anchors_t.shape)
+        print("objectness shape:", objectness_t.shape)
+        print("proposals shape:", proposals_t.shape)
+
+        img_list = ImageList(imgs_t, [imgs_t.shape[:-2]])
+        out = rpn_forward(img_list, fmaps_t,
+                          [anchors_t], 
+                          [objectness_t],# .cpu().numpy().tolist()[0],
+                          [proposals_t]) # .cpu().numpy().tolist())
+
+        print("len(output) :", len(out))
+        print("Output Shape:", out[0].shape)
+        # print(out)
+        # cp.copyto(boxes_d, cp.asarray(out))
 
         return 0
 
@@ -140,58 +156,6 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         cloned_plugin = RPNPlugin()
         cloned_plugin.__dict__.update(self.__dict__)
         return cloned_plugin
-
-    def preprocess_input(self, image_height, image_width, feature_map_shapes, sizes, aspect_ratios):
-        """
-        NumPy version of the preprocessing function that returns NumPy arrays
-        """
-
-        base_anchors_list = []
-        anchor_counts = []
-        level_offsets = []
-        
-        total_base_anchors = 0
-        for scale_set, ratio_set in zip(sizes, aspect_ratios):
-            level_base_anchors = []
-            for scale in scale_set:
-                for ratio in ratio_set:
-                    h = scale * np.sqrt(ratio)
-                    w = scale / np.sqrt(ratio)
-                    x1 = -w / 2
-                    y1 = -h / 2
-                    x2 = w / 2
-                    y2 = h / 2
-                    level_base_anchors.extend([x1, y1, x2, y2])
-            
-            num_anchors = len(level_base_anchors) // 4
-            level_offsets.append(total_base_anchors)
-            anchor_counts.append(num_anchors)
-            total_base_anchors += num_anchors
-            base_anchors_list.extend(level_base_anchors)
-
-        # Convert to NumPy arrays
-        base_anchors = np.array(base_anchors_list, dtype=np.float32).reshape(-1, 4)
-        base_anchors = np.round(base_anchors)
-
-        feature_map_info = []
-        output_offsets = []
-        total_output_anchors = 0
-
-        for i, (feat_h, feat_w) in enumerate(feature_map_shapes):
-            stride_h = image_height // feat_h
-            stride_w = image_width // feat_w
-            feature_map_info.extend([feat_h, feat_w, stride_h, stride_w])
-
-            level_output_anchors = feat_h * feat_w * anchor_counts[i]
-            total_output_anchors += level_output_anchors
-            output_offsets.append(total_output_anchors)
-
-        feature_map_info = np.array(feature_map_info, dtype=np.int32).reshape(-1, 4)
-        anchor_counts = np.array(anchor_counts, dtype=np.int32)
-        level_offsets = np.array(level_offsets, dtype=np.int32)
-        output_offsets = np.array(output_offsets, dtype=np.int32)
-
-        return base_anchors, feature_map_info, anchor_counts, level_offsets, output_offsets, total_output_anchors
 
 
 
@@ -279,11 +243,8 @@ if __name__ == "__main__":
     network.mark_output(tensor=out.get_output(0))
     build_engine = engine_from_network((builder, network), CreateConfig(fp16= True if precision == np.float16 else False))
 
-    image = np.random.random(image_shape).astype(numpy_dtype)
-    fmaps = np.random.random(f1_shape).astype(numpy_dtype)
-    # anchors = np.array(anchors).astype(numpy_dtype)
-    # objectness = np.array(objectness).astype(numpy_dtype)
-    # pred_bbox_delta = np.array(pred_bbox_delta).astype(numpy_dtype)
+    image = torch.randn(image_shape).numpy().astype(numpy_dtype)
+    fmaps = torch.randn(f1_shape).numpy().astype(numpy_dtype)
 
     with TrtRunner(build_engine, "trt_runner")as runner:
         outputs = runner.infer({"image": image, 
@@ -291,7 +252,6 @@ if __name__ == "__main__":
                                 "anchors":anchors,
                                 "objectness":objectness,
                                 "pred_bbox_delta":pred_bbox_delta})
+        # print(outputs)#['boxes'])
 
     checkCudaErrors(cuda.cuCtxDestroy(cudaCtx))
-    """
-    """
