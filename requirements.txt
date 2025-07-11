@@ -1,3 +1,4 @@
+colored==2.3.0
 cuda-bindings==12.9.0
 cuda-python==12.4.0
 cupy-cuda12x==13.4.1

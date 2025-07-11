@@ -6,7 +6,7 @@ from modules.torch_anchor import anchor_forward
 # with open(kernel_path, "r") as f:
 #     template_kernel = f.read()
 
-plugin_name = "AnchorGenPlugin"
+anchor_plugin_name = "AnchorGenPlugin"
 n_outputs = 1
 numpy_dtype = np.float32
 
@@ -19,7 +19,7 @@ class AnchorGenPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
 
         self.num_outputs = n_outputs
         self.plugin_namespace = ""
-        self.plugin_name = plugin_name
+        self.plugin_name = anchor_plugin_name
         self.plugin_version = "1"
         self.cuDevice = None
         self.sizes = [[32], [64], [128]]
@@ -178,7 +178,7 @@ class AnchorGenPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
 class AnchorGenPluginCreator(trt.IPluginCreatorV3One):
     def __init__(self):
         trt.IPluginCreatorV3One.__init__(self)
-        self.name = plugin_name
+        self.name = anchor_plugin_name
         self.plugin_namespace = ""
         self.plugin_version = "1"
         self.field_names = trt.PluginFieldCollection(
@@ -219,12 +219,12 @@ if __name__ == "__main__":
 
     # Create plugin object
     builder, network = create_network()
-    plg_creator = plg_registry.get_creator(plugin_name, "1", "")
+    plg_creator = plg_registry.get_creator(anchor_plugin_name, "1", "")
     
     plugin_fields_list = []
 
     pfc = trt.PluginFieldCollection(plugin_fields_list)
-    plugin = plg_creator.create_plugin(plugin_name, pfc, trt.TensorRTPhase.BUILD)
+    plugin = plg_creator.create_plugin(anchor_plugin_name, pfc, trt.TensorRTPhase.BUILD)
 
     # Populate network
     inputX = network.add_input(name="image", dtype=trt.DataType.FLOAT, shape=trt.Dims(image_shape))
