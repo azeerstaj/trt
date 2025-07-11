@@ -356,7 +356,7 @@ def rpn_forward(images, features, anchors, objectness, pred_bbox_deltas):
 
     boxes, scores = filter_proposals(proposals, objectness, images.image_sizes, num_anchors_per_level)
     print(f"[rpn_forward] final boxes: {[b.shape for b in boxes]}")
-    return boxes
+    return [b.cpu().numpy() for b in boxes]
 
 ImageList = namedtuple("ImageList", ["tensors", "image_sizes"])
 if __name__ == "__main__":

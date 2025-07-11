@@ -4,11 +4,6 @@ from rpn_head_plugin import RPNHeadPluginCreator, rpn_head_plugin_name
 from modules.rpn_forward import rpn_forward
 from collections import namedtuple
 
-kernel_path = "modules/cuAnchor.cuh"
-
-with open(kernel_path, "r") as f:
-    template_kernel = f.read()
-
 rpn_plugin_name = "RPNPlugin"
 n_outputs = 1
 numpy_dtype = np.float32
@@ -151,12 +146,13 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         out = rpn_forward(img_list, fmaps_t,
                           [anchors_t], 
                           [objectness_t],# .cpu().numpy().tolist()[0],
-                          [proposals_t]) # .cpu().numpy().tolist())
+                          [proposals_t])#.cpu()#.numpy()#.tolist())
 
         print("len(output) :", len(out))
         print("Output Shape:", out[0].shape)
         # print(out)
-        # cp.copyto(boxes_d, cp.asarray(out))
+        #cp.copyto(boxes_d, cp.asarray(out))
+        cp.copyto(boxes_d, cp.reshape(cp.asarray(out[0]), (-1,)))
 
         return 0
 
