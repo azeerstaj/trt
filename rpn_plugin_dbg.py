@@ -1,8 +1,13 @@
+import random
 from trt_utils import *
 from anchor_gen_plugin import AnchorGenPluginCreator, anchor_plugin_name, numpy_dtype
 from rpn_head_plugin import RPNHeadPluginCreator, rpn_head_plugin_name
 from modules.rpn_forward import rpn_forward
 from collections import namedtuple
+
+torch.manual_seed(0)
+np.random.seed(0)
+random.seed(0)
 
 rpn_plugin_name = "RPNPlugin"
 n_outputs = 1
@@ -35,9 +40,10 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
     def get_output_shapes(self, inputs, shape_inputs, exprBuilder):
         output_dims = [trt.DimsExprs(1)]
         # max_rpn_size = exprBuilder.declare_size_tensor(1,
-        #                                                exprBuilder.constant(500),
-        #                                                exprBuilder.constant(1000))
+        #                                                 exprBuilder.constant(500),
+        #                                                 exprBuilder.constant(1000))
 
+        # num_non_zero_size_tensor = exprBuilder.declare_size_tensor(1, opt_value, upper_bound)
         output_dims[0][0] = exprBuilder.constant(1000)
         return output_dims
 
@@ -112,15 +118,14 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         objectness_d = cp.ndarray(tuple(input_desc[3].dims), dtype=img_dtype, memptr=objectness_ptr)
         proposals_d = cp.ndarray(tuple(input_desc[4].dims), dtype=img_dtype, memptr=proposals_ptr)
         boxes_d = cp.ndarray((volume(output_desc[0].dims)), dtype=img_dtype, memptr=boxes_ptr)
-
         print("Arrays populated.")
 
-        imgs_t = torch.as_tensor(imgs_d, device="cuda")#.squeeze(0)
-        fmaps_t = torch.as_tensor(fmaps_d, device="cuda")#.squeeze(0)
-        anchors_t = torch.as_tensor(anchors_d, device="cuda")#.unsqueeze(0)
-        objectness_t = torch.as_tensor(objectness_d, device="cuda").unsqueeze(0) # Turn on if generating manually
-        proposals_t = torch.as_tensor(proposals_d, device="cuda").unsqueeze(0) # Turn on if generating manually
-
+        # Simulated Objectness & Proposals
+        imgs_t = torch.as_tensor(imgs_d, device="cuda")
+        fmaps_t = torch.as_tensor(fmaps_d, device="cuda")
+        anchors_t = torch.as_tensor(anchors_d, device="cuda").squeeze(0)
+        objectness_t = torch.as_tensor(objectness_d, device="cuda").squeeze(0)
+        proposals_t = torch.as_tensor(proposals_d, device="cuda").squeeze(0)
         print("Torch populated.")
 
         print("imgs shape:", imgs_t.shape)
@@ -129,7 +134,7 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         print("objectness shape:", objectness_t.shape)
         print("proposals shape:", proposals_t.shape)
 
-        img_list = ImageList(imgs_t, [imgs_t.shape[:-2]])
+        img_list = ImageList(imgs_t, [imgs_t.shape[-2:]])
         out = rpn_forward(img_list, fmaps_t,
                           [anchors_t], 
                           [objectness_t],# .cpu().numpy().tolist()[0],
@@ -183,9 +188,13 @@ if __name__ == "__main__":
     precision = np.float32
     image_shape = [1, 3, 800, 800]
     f1_shape = [1, 256, 50, 50]
+    batch_size = 1
+
+    features = [torch.randn(f1_shape)]
 
     # Register plugin creator
     plg_registry = trt.get_plugin_registry()
+
     rpn_plugin_creator = RPNPluginCreator()
     rpn_head_plugin_creator = RPNHeadPluginCreator()
     anchor_plugin_creator = AnchorGenPluginCreator()
@@ -201,26 +210,52 @@ if __name__ == "__main__":
     anchor_plg_creator = plg_registry.get_creator(anchor_plugin_name, "1", "")
     
     plugin_fields_list = []
-    pfc = trt.PluginFieldCollection(plugin_fields_list)
 
-    # Plugins
+    pfc = trt.PluginFieldCollection(plugin_fields_list)
     rpn_plugin = rpn_plg_creator.create_plugin(rpn_plugin_name, pfc, trt.TensorRTPhase.BUILD)
     rpn_head_plugin = rpn_head_plg_creator.create_plugin(rpn_head_plugin_name, pfc, trt.TensorRTPhase.BUILD)
     anchor_plugin = anchor_plg_creator.create_plugin(anchor_plugin_name, pfc, trt.TensorRTPhase.BUILD)
 
+    num_anchors = 3
+    objectness = []
+    pred_bbox_delta = []
+    anchors = []
+
+    for feat in features: # features
+        N, C, H, W = feat.shape
+        objectness.append(torch.randn(N, 3, H, W))
+        pred_bbox_delta.append(torch.randn(N, 3 * 4, H, W))
+
+    for _ in range(batch_size):
+        all_anchors = []
+        for feat in features:
+            _, _, H, W = feat.shape
+            A = num_anchors
+            total = H * W * A
+            anchors_per_feat = torch.rand(total, 4) * 800  # random box coords
+            all_anchors.append(anchors_per_feat)
+        anchors.append(torch.cat(all_anchors, dim=0))
+
+    print("\nANCHORS:\n", anchors[0][0][:5])
+    print("\nOBJECTNESS:\n", objectness[0][0][0][0][:5])
+    print("\nPRED_BBOX_DELTAS:\n", pred_bbox_delta[0][0][0][0][:5])
+
+    anchors = np.array(anchors).astype(numpy_dtype)
+    objectness = np.array(objectness).astype(numpy_dtype)
+    pred_bbox_delta = np.array(pred_bbox_delta).astype(numpy_dtype)
+
     # Populate network
     inputImage = network.add_input(name="image", dtype=trt.DataType.FLOAT, shape=trt.Dims(image_shape))
     inputFmaps = network.add_input(name="fmaps", dtype=trt.DataType.FLOAT, shape=trt.Dims(f1_shape))
-    
-    # layers outputs
-    anchor_out = network.add_plugin_v3([inputImage, inputFmaps], [], anchor_plugin)
-    rpn_head_out = network.add_plugin_v3([inputFmaps], [], rpn_head_plugin)
+    inputAnchors = network.add_input(name="anchors", dtype=trt.DataType.FLOAT, shape=trt.Dims(anchors.shape))
+    inputObjectness = network.add_input(name="objectness", dtype=trt.DataType.FLOAT, shape=trt.Dims(objectness.shape))
+    inputBbox = network.add_input(name="pred_bbox_delta", dtype=trt.DataType.FLOAT, shape=trt.Dims(pred_bbox_delta.shape))
 
-    out = network.add_plugin_v3(
-        [inputImage, inputFmaps, anchor_out.get_output(0), 
-        rpn_head_out.get_output(0), rpn_head_out.get_output(1)], 
-        [], rpn_plugin
-    )
+    out = network.add_plugin_v3([inputImage, inputFmaps,
+                                inputAnchors, inputObjectness, 
+                                inputBbox], 
+                                [], rpn_plugin)
+
 
     out.get_output(0).name = "boxes"
     network.mark_output(tensor=out.get_output(0))
@@ -231,7 +266,10 @@ if __name__ == "__main__":
 
     with TrtRunner(build_engine, "trt_runner")as runner:
         outputs = runner.infer({"image": image, 
-                                "fmaps":fmaps})
-        print(outputs['boxes'].shape)
+                                "fmaps":fmaps,
+                                "anchors":anchors,
+                                "objectness":objectness,
+                                "pred_bbox_delta":pred_bbox_delta})
+        print(outputs['boxes'])
 
     checkCudaErrors(cuda.cuCtxDestroy(cudaCtx))

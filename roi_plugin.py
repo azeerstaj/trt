@@ -224,8 +224,6 @@ if __name__ == "__main__":
                                       shape=trt.Dims(f1_shape))
 
     # These are gonna be used to get size
-    """
-    """
     inputImages = network.add_input(name="images", 
                                    dtype=trt.DataType.FLOAT, 
                                    shape=trt.Dims(image_shape))

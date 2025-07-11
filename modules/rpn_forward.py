@@ -1,3 +1,4 @@
+import random
 import math
 import torch
 from torch import Tensor
@@ -7,8 +8,11 @@ from .torchvision_utils import (
     batched_nms
 )
 from collections import namedtuple
+import numpy as np
 
 torch.manual_seed(0)
+np.random.seed(0)
+random.seed(0)
 
 # def rpn_head_forward(features):
 #     for feature in features:
@@ -215,21 +219,21 @@ def concat_box_prediction_layers(box_cls: list[Tensor], box_regression: list[Ten
     # all feature levels concatenated, so we keep the same representation
     # for the objectness and the box_regression
     for box_cls_per_level, box_regression_per_level in zip(box_cls, box_regression):
-        print("box cls per lvl:", box_cls_per_level.shape)
-        print("box reg per lvl:", box_regression_per_level.shape)
+        # print("box cls per lvl:", box_cls_per_level.shape)
+        # print("box reg per lvl:", box_regression_per_level.shape)
         N, AxC, H, W = box_cls_per_level.shape
         Ax4 = box_regression_per_level.shape[1]
         A = Ax4 // 4
         C = AxC // A
-        print("N:", N)
-        print("Ax4:", Ax4)
-        print("AxC:", AxC)
-        print("AxC // A:", AxC // A)
-        print("C:", C)
-        print("A:", A)
-        print("H:", H)
-        print("W:", W)
-        print("Box cls per lvl:", box_cls_per_level.shape)
+        # print("N:", N)
+        # print("Ax4:", Ax4)
+        # print("AxC:", AxC)
+        # print("AxC // A:", AxC // A)
+        # print("C:", C)
+        # print("A:", A)
+        # print("H:", H)
+        # print("W:", W)
+        # print("Box cls per lvl:", box_cls_per_level.shape)
         box_cls_per_level = permute_and_flatten(box_cls_per_level, N, A, C, H, W)
         box_cls_flattened.append(box_cls_per_level)
 
@@ -240,7 +244,7 @@ def concat_box_prediction_layers(box_cls: list[Tensor], box_regression: list[Ten
     # being concatenated as well)
     box_cls = torch.cat(box_cls_flattened, dim=1).flatten(0, -2)
     box_regression = torch.cat(box_regression_flattened, dim=1).reshape(-1, 4)
-    print(f"[concat_box_prediction_layers] output: box_cls={box_cls.shape}, box_regression={box_regression.shape}")
+    # print(f"[concat_box_prediction_layers] output: box_cls={box_cls.shape}, box_regression={box_regression.shape}")
     return box_cls, box_regression
 
 def _topk_min(input: Tensor, orig_kval: int, axis: int) -> int:
@@ -310,17 +314,19 @@ def filter_proposals(
 
         boxes = clip_boxes_to_image(boxes, img_shape)
         print("[filter_proposals] boxes2:", boxes.shape)
-        print(boxes)
+        # print(boxes)
 
         # remove small boxes
         keep = remove_small_boxes(boxes, min_size)
-        print("[filter_proposals] len(keep1):", len(keep))
+        print("[filter_proposals] boxes[:5]:", boxes[0][:5])
+        print("[filter_proposals] len(keep1):", len(keep), ",min_size:", min_size)
         boxes, scores, lvl = boxes[keep], scores[keep], lvl[keep]
 
         # remove low scoring boxes
         # use >= for Backwards compatibility
         keep = torch.where(scores >= score_thresh)[0]
-        print("[filter_proposals] len(keep2):", len(keep))
+        print("[filter_proposals] scores[:5]", scores[:5])
+        print("[filter_proposals] len(keep2):", len(keep), ",score_thresh:", score_thresh)
         boxes, scores, lvl = boxes[keep], scores[keep], lvl[keep]
 
         # non-maximum suppression, independently done per level
@@ -403,6 +409,10 @@ if __name__ == "__main__":
     
     print("len(pred_bbox_deltas)", len(pred_bbox_deltas))
     print("pred_bbox_deltas[0].shape", pred_bbox_deltas[0].shape)
+
+    print("\nANCHORS:\n", anchors[0][0][:5])
+    print("\nOBJECTNESS:\n", objectness[0][0][0][0][:5])
+    print("\nPRED_BBOX_DELTAS:\n", pred_bbox_deltas[0][0][0][0][:5])
 
     # Run RPN forward
     proposals = rpn_forward(images, features, anchors, objectness, pred_bbox_deltas)
