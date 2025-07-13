@@ -44,8 +44,12 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         #                                                 exprBuilder.constant(500),
         #                                                 exprBuilder.constant(1000))
 
+        max_props = exprBuilder.constant(self.max_proposals)
+        max_props = exprBuilder.operation(trt.DimensionOperation.PROD,
+                                          max_props,
+                                          exprBuilder.constant(4))
         # num_non_zero_size_tensor = exprBuilder.declare_size_tensor(1, opt_value, upper_bound)
-        output_dims[0][0] = exprBuilder.constant(self.max_proposals)
+        output_dims[0][0] = max_props
         return output_dims
 
     # plugin input params, custom backend?
@@ -147,6 +151,7 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
 
         boxes_np = out[0]
         num_proposals = boxes_np.shape[0]
+        print("num_proposals:", num_proposals)  # e.g., (N, 4)
 
         if num_proposals < max_proposals:
             pad = np.zeros((max_proposals - num_proposals, boxes_np.shape[1]), dtype=boxes_np.dtype)
@@ -296,5 +301,6 @@ if __name__ == "__main__":
                                 "objectness":objectness,
                                 "pred_bbox_delta":pred_bbox_delta})
         print(outputs['boxes'])
+        print("OUTPUT:", outputs['boxes'].shape)
 
     checkCudaErrors(cuda.cuCtxDestroy(cudaCtx))
