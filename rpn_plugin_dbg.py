@@ -10,7 +10,7 @@ np.random.seed(0)
 random.seed(0)
 
 rpn_plugin_name = "RPNPlugin"
-n_outputs = 1
+n_outputs = 2
 numpy_dtype = np.float32
 
 ImageList = namedtuple("ImageList", ["tensors", "image_sizes"])
@@ -35,11 +35,11 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
     # Return Data Type
     def get_output_data_types(self, input_types):
         # print("Output dtypes")
-        return [trt.DataType.FLOAT]
+        return [trt.DataType.FLOAT, trt.DataType.INT64]
 
     # inputs : shape of inputs
     def get_output_shapes(self, inputs, shape_inputs, exprBuilder):
-        output_dims = [trt.DimsExprs(2)]
+        output_dims = [trt.DimsExprs(2), trt.DimsExprs(0)]
         # max_rpn_size = exprBuilder.declare_size_tensor(1,
         #                                                 exprBuilder.constant(500),
         #                                                 exprBuilder.constant(1000))
@@ -85,6 +85,7 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         # print("LEN OF OUTPUTS:", len(output_desc))
 
         img_dtype = trt.nptype(input_desc[0].type) # imgs
+        active_rows_dtype = trt.nptype(output_desc[1].type) # imgs
 
         imgs_mem = cp.cuda.UnownedMemory(
             inputs[0], volume(input_desc[0].dims) * cp.dtype(img_dtype).itemsize, self
@@ -109,6 +110,10 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         boxes_mem = cp.cuda.UnownedMemory(
             outputs[0], volume(output_desc[0].dims) * cp.dtype(img_dtype).itemsize, self,
         )
+
+        # active_rows_mem = cp.cuda.UnownedMemory(
+        #     outputs[1], volume(output_desc[1].dims) * cp.dtype(active_rows_dtype).itemsize, self,
+        # )
         print("Device Mem Allocated.")
 
         imgs_ptr = cp.cuda.MemoryPointer(imgs_mem, 0)
@@ -117,6 +122,7 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         objectness_ptr = cp.cuda.MemoryPointer(objectness_mem, 0)
         proposals_ptr = cp.cuda.MemoryPointer(proposals_mem, 0)
         boxes_ptr = cp.cuda.MemoryPointer(boxes_mem, 0)
+        # active_rows_ptr = cp.cuda.MemoryPointer(active_rows_mem, 0)
         print("Pointers Initialized.")
 
         imgs_d = cp.ndarray(tuple(input_desc[0].dims), dtype=img_dtype, memptr=imgs_ptr)
@@ -124,7 +130,9 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         anchors_d = cp.ndarray(tuple(input_desc[2].dims), dtype=img_dtype, memptr=anchors_ptr)
         objectness_d = cp.ndarray(tuple(input_desc[3].dims), dtype=img_dtype, memptr=objectness_ptr)
         proposals_d = cp.ndarray(tuple(input_desc[4].dims), dtype=img_dtype, memptr=proposals_ptr)
+       
         boxes_d = cp.ndarray((volume(output_desc[0].dims)), dtype=img_dtype, memptr=boxes_ptr)
+        # active_rows_d = cp.ndarray((volume(output_desc[1].dims)), dtype=active_rows_dtype, memptr=active_rows_ptr)
         print("Arrays populated.")
 
         # Simulated Objectness & Proposals
@@ -164,7 +172,8 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
 
         # Now boxes_np has shape (max_proposals, 4)
         cp.copyto(boxes_d, cp.reshape(cp.asarray(boxes_np), (-1,)))
-
+        #cp.copyto(active_rows_d, cp.asarray([num_proposals]))
+        
         return 0
 
 
@@ -291,7 +300,9 @@ if __name__ == "__main__":
 
 
     out.get_output(0).name = "boxes"
+    out.get_output(1).name = "active_rows"
     network.mark_output(tensor=out.get_output(0))
+    network.mark_output(tensor=out.get_output(1))
     build_engine = engine_from_network((builder, network), CreateConfig(fp16= True if precision == np.float16 else False))
 
 
@@ -303,6 +314,7 @@ if __name__ == "__main__":
                                 "objectness":objectness,
                                 "pred_bbox_delta":pred_bbox_delta})
         print(outputs['boxes'])
+        print(outputs['active_rows'])
         print("OUTPUT:", outputs['boxes'].shape)
 
     checkCudaErrors(cuda.cuCtxDestroy(cudaCtx))
