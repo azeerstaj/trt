@@ -39,17 +39,19 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
 
     # inputs : shape of inputs
     def get_output_shapes(self, inputs, shape_inputs, exprBuilder):
-        output_dims = [trt.DimsExprs(1)]
+        output_dims = [trt.DimsExprs(2)]
         # max_rpn_size = exprBuilder.declare_size_tensor(1,
         #                                                 exprBuilder.constant(500),
         #                                                 exprBuilder.constant(1000))
 
         max_props = exprBuilder.constant(self.max_proposals)
-        max_props = exprBuilder.operation(trt.DimensionOperation.PROD,
-                                          max_props,
-                                          exprBuilder.constant(4))
-        # num_non_zero_size_tensor = exprBuilder.declare_size_tensor(1, opt_value, upper_bound)
+
+        # max_props = exprBuilder.operation(trt.DimensionOperation.PROD,
+        #                                   max_props,
+        #                                   exprBuilder.constant(4))
+
         output_dims[0][0] = max_props
+        output_dims[0][1] = exprBuilder.constant(4)
         return output_dims
 
     # plugin input params, custom backend?
