@@ -122,10 +122,11 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         boxes_t = torch.as_tensor(boxes_d, device="cuda")
         images_t = torch.as_tensor(images_d, device="cuda")
         print("Torch populated.")
+        
+        print("[enqueue] MAPS:", fmaps_t.shape, "values:", fmaps_t.view(-1)[:5])
+        print("[enqueue] BOXES:", boxes_t.shape, "values:", boxes_t.view(-1)[:5])
+        print("[enqueue] IMGS:", images_t.shape, "values:", images_t.view(-1)[:5])
 
-        print("MAPS:", fmaps_t.shape)
-        print("BOXES:", boxes_t.shape)
-        print("IMGS:", images_t.shape)
 
         # Postprocessing
         fmap_num = 0

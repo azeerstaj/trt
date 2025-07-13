@@ -26,6 +26,7 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         self.plugin_name = rpn_plugin_name
         self.plugin_version = "1"
         self.cuDevice = None
+        self.max_proposals = 1000
 
     def get_capability_interface(self, type):
         # print("Capability")
@@ -44,7 +45,7 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         #                                                 exprBuilder.constant(1000))
 
         # num_non_zero_size_tensor = exprBuilder.declare_size_tensor(1, opt_value, upper_bound)
-        output_dims[0][0] = exprBuilder.constant(1000)
+        output_dims[0][0] = exprBuilder.constant(self.max_proposals)
         return output_dims
 
     # plugin input params, custom backend?
@@ -128,23 +129,34 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         proposals_t = torch.as_tensor(proposals_d, device="cuda").squeeze(0)
         print("Torch populated.")
 
-        print("imgs shape:", imgs_t.shape)
-        print("fmaps shape:", fmaps_t.shape)
-        print("anchors shape:", anchors_t.shape)
-        print("objectness shape:", objectness_t.shape)
-        print("proposals shape:", proposals_t.shape)
+        print("[enqueue] imgs shape:", imgs_t.shape, "values:", imgs_t.view(-1)[:5])
+        print("[enqueue] fmaps shape:", fmaps_t.shape, "values:", fmaps_t.view(-1)[:5])
+        print("[enqueue] anchors shape:", anchors_t.shape, "values:", anchors_t.view(-1)[:5])
+        print("[enqueue] objectness shape:", objectness_t.shape, "values:", objectness_t.view(-1)[:5])
+        print("[enqueue] proposals shape:", proposals_t.shape, "values:", proposals_t.view(-1)[:5])
 
         img_list = ImageList(imgs_t, [imgs_t.shape[-2:]])
         out = rpn_forward(img_list, fmaps_t,
                           [anchors_t], 
-                          [objectness_t],# .cpu().numpy().tolist()[0],
-                          [proposals_t])#.cpu()#.numpy()#.tolist())
+                          [objectness_t],
+                          [proposals_t])
 
-        print("len(output) :", len(out))
-        print("Output Shape:", out[0].shape)
-        # print(out)
-        #cp.copyto(boxes_d, cp.asarray(out))
-        cp.copyto(boxes_d, cp.reshape(cp.asarray(out[0]), (-1,)))
+        print("len(output):", len(out))
+        print("Output Shape:", out[0].shape)  # e.g., (N, 4)
+        max_proposals = self.max_proposals
+
+        boxes_np = out[0]
+        num_proposals = boxes_np.shape[0]
+
+        if num_proposals < max_proposals:
+            pad = np.zeros((max_proposals - num_proposals, boxes_np.shape[1]), dtype=boxes_np.dtype)
+            boxes_np = np.concatenate([boxes_np, pad], axis=0)
+        elif num_proposals > max_proposals:
+            boxes_np = boxes_np[:max_proposals]
+        print("boxes_np.shape:", boxes_np.shape)
+
+        # Now boxes_np has shape (max_proposals, 4)
+        cp.copyto(boxes_d, cp.reshape(cp.asarray(boxes_np), (-1,)))
 
         return 0
 
@@ -236,13 +248,27 @@ if __name__ == "__main__":
             all_anchors.append(anchors_per_feat)
         anchors.append(torch.cat(all_anchors, dim=0))
 
-    print("\nANCHORS:\n", anchors[0][0][:5])
-    print("\nOBJECTNESS:\n", objectness[0][0][0][0][:5])
-    print("\nPRED_BBOX_DELTAS:\n", pred_bbox_delta[0][0][0][0][:5])
+
 
     anchors = np.array(anchors).astype(numpy_dtype)
     objectness = np.array(objectness).astype(numpy_dtype)
     pred_bbox_delta = np.array(pred_bbox_delta).astype(numpy_dtype)
+
+    image = torch.randn(image_shape).numpy().astype(numpy_dtype)
+    fmaps = torch.randn(f1_shape).numpy().astype(numpy_dtype)
+    
+
+    print("=" * 20)
+    print("BEFORE ENQUEUE")
+    print("image shape:", image.shape, "values:", image.reshape(-1)[:5])
+    print("fmaps shape:", fmaps.shape, "values:", fmaps.reshape(-1)[:5])
+
+    print("\nANCHORS first 5 (flattened):", anchors[0][0].reshape(-1)[:5])
+    print("\nOBJECTNESS first 5 (flattened):", objectness[0][0][0][0].reshape(-1)[:5])
+    print("\nPRED_BBOX_DELTAS first 5 (flattened):", pred_bbox_delta[0][0][0][0].reshape(-1)[:5])
+    print("=" * 20)
+    # exit(0)
+
 
     # Populate network
     inputImage = network.add_input(name="image", dtype=trt.DataType.FLOAT, shape=trt.Dims(image_shape))
@@ -261,9 +287,8 @@ if __name__ == "__main__":
     network.mark_output(tensor=out.get_output(0))
     build_engine = engine_from_network((builder, network), CreateConfig(fp16= True if precision == np.float16 else False))
 
-    image = torch.randn(image_shape).numpy().astype(numpy_dtype)
-    fmaps = torch.randn(f1_shape).numpy().astype(numpy_dtype)
 
+    
     with TrtRunner(build_engine, "trt_runner")as runner:
         outputs = runner.infer({"image": image, 
                                 "fmaps":fmaps,
