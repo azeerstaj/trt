@@ -173,6 +173,50 @@ def multiscale_roi_align_forward(features: dict, boxes: list[torch.Tensor], imag
 
     return output
 
+def box_head_forward(box_features, weights):
+    x = box_features.flatten(start_dim=1)
+
+    # f6
+    x = F.linear(
+        x,
+        weight=weights['roi_heads.box_head.fc6.weight'],
+        bias=weights['roi_heads.box_head.fc6.bias']
+    )
+
+    # f7
+    x = F.linear(
+        x,
+        weight=weights['roi_heads.box_head.fc7.weight'],
+        bias=weights['roi_heads.box_head.fc7.bias']
+    )
+
+    return x
+
+def box_predictor_forward(box_features, weights):
+    if box_features.dim() == 4:
+        torch._assert(
+            list(x.shape[2:]) == [1, 1],
+            f"x has the wrong shape, expecting the last two dimensions to be [1,1] instead of {list(x.shape[2:])}",
+        )
+
+    x = box_features.flatten(start_dim=1)
+
+    # cls_score
+    scores = F.linear(
+        x,
+        weight=weights['roi_heads.box_predictor.cls_score.weight'],
+        bias=weights['roi_heads.box_predictor.cls_score.bias']
+    )
+
+    # box deltas
+    bbox_deltas = F.linear(
+        x,
+        weight=weights['roi_heads.box_predictor.bbox_pred.weight'],
+        bias=weights['roi_heads.box_predictor.bbox_pred.bias']
+    )
+
+    return scores, bbox_deltas
+
 if __name__ == "__main__":
     
     image_path = "../test_cases/demo.jpg"

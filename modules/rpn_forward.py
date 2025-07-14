@@ -345,9 +345,6 @@ def filter_proposals(
 
 def rpn_forward(images, features, anchors, objectness, pred_bbox_deltas):
     print(f"[rpn_forward] features: {len(features)}, images: {len(images.image_sizes)}")
-
-    # print(f"[rpn_forward] features: {features[0]}, images: {images.tensors}")
-
     num_anchors_per_level_shape_tensors = [o[0].shape for o in objectness]
     num_anchors_per_level = [s[0] * s[1] * s[2] for s in num_anchors_per_level_shape_tensors]
 
@@ -362,7 +359,7 @@ def rpn_forward(images, features, anchors, objectness, pred_bbox_deltas):
 
     boxes, scores = filter_proposals(proposals, objectness, images.image_sizes, num_anchors_per_level)
     print(f"[rpn_forward] final boxes: {[b.shape for b in boxes]}")
-    return [b.cpu().numpy() for b in boxes]
+    return [b.cpu().numpy() for b in boxes] # sussy 
 
 ImageList = namedtuple("ImageList", ["tensors", "image_sizes"])
 if __name__ == "__main__":
@@ -375,8 +372,8 @@ if __name__ == "__main__":
     # Simulate features from 3 FPN levels
     features = [
         torch.randn(batch_size, 256, 50, 50),
-        # torch.randn(batch_size, 256, 25, 25),
-        # torch.randn(batch_size, 256, 13, 13),
+        torch.randn(batch_size, 512, 25, 25),
+        torch.randn(batch_size, 1024, 10, 10),
     ]
 
     # Assume 3 anchors per spatial location

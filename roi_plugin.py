@@ -1,9 +1,13 @@
 from trt_utils import *
-from modules.roi_forward import multiscale_roi_align_forward
+from modules.roi_forward import (
+    multiscale_roi_align_forward,
+    box_head_forward,
+    box_predictor_forward
+)
 
 # Multi-Scale RoI Plugin.
 mscale_roi_plugin_name = "MScaleRoIPlugin"
-n_outputs = 1
+n_outputs = 2
 numpy_dtype = np.float32
 
 class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.IPluginV3OneRuntime):
@@ -19,6 +23,9 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         self.plugin_version = "1"
         self.cuDevice = None
         self.output_size = 7
+        self.out_cls_score = 91
+        self.out_bbox_pred = 364
+        self.weights = torch.load("weights/fasterrcnn1.pt", weights_only=True, map_location='cuda')
 
     def get_capability_interface(self, type):
         # print("Capability")
@@ -27,7 +34,7 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
     # Return Data Type
     def get_output_data_types(self, input_types):
         # print("Output dtypes")
-        return [trt.DataType.FLOAT]
+        return [trt.DataType.FLOAT, trt.DataType.FLOAT]
 
     # inputs : shape of inputs
     def get_output_shapes(self, inputs, shape_inputs, exprBuilder):
@@ -39,12 +46,12 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         # outputs #1 : C
         # outputs #2 : self.output_size
         # outputs #3 : self.output_size
-        output_dims = [trt.DimsExprs(4)]#, trt.DimsExprs(4)]
+        output_dims = [trt.DimsExprs(2), trt.DimsExprs(2)]#, trt.DimsExprs(4)]
 
-        output_dims[0][0] = inputs[2][0]
-        output_dims[0][1] = inputs[0][1]
-        output_dims[0][2] = exprBuilder.constant(self.output_size)
-        output_dims[0][3] = exprBuilder.constant(self.output_size)
+        output_dims[0][0] = exprBuilder.constant(1)
+        output_dims[1][0] = exprBuilder.constant(1)
+        output_dims[0][1] = exprBuilder.constant(self.out_cls_score) # cls
+        output_dims[1][1] = exprBuilder.constant(self.out_bbox_pred)       # bbox
 
         return output_dims
 
@@ -98,24 +105,33 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
             self
         )
 
-        roi_mem = cp.cuda.UnownedMemory(
+        # cls reg
+        cls_reg_mem = cp.cuda.UnownedMemory(
             outputs[0],
             volume(output_desc[0].dims) * cp.dtype(roi_dtype).itemsize,
             self,
         )
 
+        # cls reg
+        bbox_predictor_mem = cp.cuda.UnownedMemory(
+            outputs[1],
+            volume(output_desc[1].dims) * cp.dtype(roi_dtype).itemsize,
+            self,
+        )
         print("Device Mem Allocated.")
 
         fmaps_ptr = cp.cuda.MemoryPointer(fmaps_mem, 0)
         boxes_ptr = cp.cuda.MemoryPointer(boxes_mem, 0)
         images_ptr = cp.cuda.MemoryPointer(images_mem, 0)
-        roi_ptr = cp.cuda.MemoryPointer(roi_mem, 0)
+        cls_reg_ptr = cp.cuda.MemoryPointer(cls_reg_mem, 0)
+        bbox_predictor_ptr = cp.cuda.MemoryPointer(bbox_predictor_mem, 0)
         print("Pointers Initialized.")
 
         fmaps_d = cp.ndarray(tuple(input_desc[0].dims), dtype=img_dtype, memptr=fmaps_ptr)
         boxes_d = cp.ndarray(tuple(input_desc[1].dims), dtype=img_dtype, memptr=boxes_ptr)
         images_d = cp.ndarray(tuple(input_desc[2].dims), dtype=img_dtype, memptr=images_ptr)
-        roi_d = cp.ndarray((volume(output_desc[0].dims)), dtype=img_dtype, memptr=roi_ptr)
+        cls_reg_d = cp.ndarray((volume(output_desc[0].dims)), dtype=img_dtype, memptr=cls_reg_ptr)
+        bbox_predictor_d = cp.ndarray((volume(output_desc[1].dims)), dtype=img_dtype, memptr=bbox_predictor_ptr)
         print("Arrays populated.")
 
         fmaps_t = torch.as_tensor(fmaps_d, device="cuda")
@@ -127,7 +143,6 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         print("[enqueue] BOXES:", boxes_t.shape, "values:", boxes_t.view(-1)[:5])
         print("[enqueue] IMGS:", images_t.shape, "values:", images_t.view(-1)[:5])
 
-
         # Postprocessing
         fmap_num = 0
         fmaps_t_dict = dict()
@@ -138,22 +153,22 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         boxes_t = [b.cuda().unsqueeze(0) for b in boxes_t]
         image_sizes = [(i.shape[-2], i.shape[-1]) for i in images_t]
 
-        out = multiscale_roi_align_forward(boxes=boxes_t, 
+        box_features = multiscale_roi_align_forward(boxes=boxes_t, 
                                            features=fmaps_t_dict, 
                                            image_sizes=image_sizes,
                                            output_size=self.output_size)#.cpu().numpy()
 
-        # logits, bbox_reg = rpn_head_forward(x=[fmaps_t], weights=self.weights)#.cpu()
-        # out = anchor_forward(imgs_t, fmaps_t, self.sizes, self.aspect_ratios).view(-1)
-        # print(logits[0].shape)
-        # print(bbox_reg[0].shape)
-        print("MScale Output Size:", out.shape)
+        # box_features
+        box_features = box_head_forward(box_features, self.weights)
+        class_logits, box_regression = box_predictor_forward(box_features, self.weights)
+
+        print("Final box_features Size:", box_features.shape)
+        print("Class logits Size:", class_logits.shape)
+        print("Box regression Size:", box_regression.shape)
         # cp.copyto(cls_logits_d, cp.asarray(logits))
 
-        # cp.copyto(cls_logits_d, cp.reshape(cp.asarray(logits), (-1,)))
-        # cp.copyto(out, cp.reshape(cp.asarray(out), (-1,)))
-        cp.copyto(roi_d, cp.reshape(cp.asarray(out), (-1,)))
-        # print(out)
+        cp.copyto(cls_reg_d, cp.reshape(cp.asarray(class_logits), (-1,)))
+        cp.copyto(bbox_predictor_d, cp.reshape(cp.asarray(box_regression), (-1,)))
         return 0
 
 
@@ -235,8 +250,10 @@ if __name__ == "__main__":
 
     out = network.add_plugin_v3([inputFeatures, inputBoxes, inputImages], [], plugin)
 
-    out.get_output(0).name = "roi"
+    out.get_output(0).name = "cls_reg"
+    out.get_output(1).name = "bbox_pred"
     network.mark_output(tensor=out.get_output(0))
+    network.mark_output(tensor=out.get_output(1))
 
     build_engine = engine_from_network((builder, network), CreateConfig(fp16=True if precision == np.float16 else False))
     fmaps = np.random.random(f1_shape).astype(numpy_dtype)
@@ -249,7 +266,8 @@ if __name__ == "__main__":
                 "images":images, 
                 "boxes":boxes
             })
-        print(out['roi'].shape)
+        print("cls.shape", out['cls_reg'].shape)
+        print("bbox_pred.shape", out['bbox_pred'].shape)
         # print(out['roi'][0][:10])
         # print(out['bbox_pred'].shape)
         # print("Outputs Shape:", outputs.shape)

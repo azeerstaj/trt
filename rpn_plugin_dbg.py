@@ -35,11 +35,11 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
     # Return Data Type
     def get_output_data_types(self, input_types):
         # print("Output dtypes")
-        return [trt.DataType.FLOAT, trt.DataType.INT64]
+        return [trt.DataType.FLOAT, trt.DataType.FLOAT]
 
     # inputs : shape of inputs
     def get_output_shapes(self, inputs, shape_inputs, exprBuilder):
-        output_dims = [trt.DimsExprs(2), trt.DimsExprs(0)]
+        output_dims = [trt.DimsExprs(2), trt.DimsExprs(1)]
         # max_rpn_size = exprBuilder.declare_size_tensor(1,
         #                                                 exprBuilder.constant(500),
         #                                                 exprBuilder.constant(1000))
@@ -52,6 +52,7 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
 
         output_dims[0][0] = max_props
         output_dims[0][1] = exprBuilder.constant(4)
+        output_dims[1][0] = exprBuilder.constant(1)
         return output_dims
 
     # plugin input params, custom backend?
@@ -80,12 +81,12 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
     # input_desc & output_desc : dims, format and type 
     def enqueue(self, input_desc, output_desc, inputs, outputs, workspace, stream):
 
-        print("INFERENCE ...")
-        # print("LEN OF  INPUTS:", len(input_desc))
-        # print("LEN OF OUTPUTS:", len(output_desc))
-
         img_dtype = trt.nptype(input_desc[0].type) # imgs
         active_rows_dtype = trt.nptype(output_desc[1].type) # imgs
+        print("Img dtype:", img_dtype)
+        print("Active Rows dtype:", active_rows_dtype)
+        print("Img Dims:", input_desc[0].dims)
+        print("Active Rows dims:", output_desc[1].dims)
 
         imgs_mem = cp.cuda.UnownedMemory(
             inputs[0], volume(input_desc[0].dims) * cp.dtype(img_dtype).itemsize, self
@@ -111,9 +112,9 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
             outputs[0], volume(output_desc[0].dims) * cp.dtype(img_dtype).itemsize, self,
         )
 
-        # active_rows_mem = cp.cuda.UnownedMemory(
-        #     outputs[1], volume(output_desc[1].dims) * cp.dtype(active_rows_dtype).itemsize, self,
-        # )
+        active_rows_mem = cp.cuda.UnownedMemory(
+            outputs[1], volume(output_desc[1].dims) * cp.dtype(active_rows_dtype).itemsize, self,
+        )
         print("Device Mem Allocated.")
 
         imgs_ptr = cp.cuda.MemoryPointer(imgs_mem, 0)
@@ -122,7 +123,7 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         objectness_ptr = cp.cuda.MemoryPointer(objectness_mem, 0)
         proposals_ptr = cp.cuda.MemoryPointer(proposals_mem, 0)
         boxes_ptr = cp.cuda.MemoryPointer(boxes_mem, 0)
-        # active_rows_ptr = cp.cuda.MemoryPointer(active_rows_mem, 0)
+        active_rows_ptr = cp.cuda.MemoryPointer(active_rows_mem, 0)
         print("Pointers Initialized.")
 
         imgs_d = cp.ndarray(tuple(input_desc[0].dims), dtype=img_dtype, memptr=imgs_ptr)
@@ -132,7 +133,7 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         proposals_d = cp.ndarray(tuple(input_desc[4].dims), dtype=img_dtype, memptr=proposals_ptr)
        
         boxes_d = cp.ndarray((volume(output_desc[0].dims)), dtype=img_dtype, memptr=boxes_ptr)
-        # active_rows_d = cp.ndarray((volume(output_desc[1].dims)), dtype=active_rows_dtype, memptr=active_rows_ptr)
+        active_rows_d = cp.ndarray((volume(output_desc[1].dims)), dtype=active_rows_dtype, memptr=active_rows_ptr)
         print("Arrays populated.")
 
         # Simulated Objectness & Proposals
@@ -172,7 +173,7 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
 
         # Now boxes_np has shape (max_proposals, 4)
         cp.copyto(boxes_d, cp.reshape(cp.asarray(boxes_np), (-1,)))
-        #cp.copyto(active_rows_d, cp.asarray([num_proposals]))
+        cp.copyto(active_rows_d, cp.asarray([num_proposals]))
         
         return 0
 
@@ -195,11 +196,7 @@ class RPNPluginCreator(trt.IPluginCreatorV3One):
         self.name = rpn_plugin_name
         self.plugin_namespace = ""
         self.plugin_version = "1"
-        self.field_names = trt.PluginFieldCollection(
-            [
-                # trt.PluginField("backend", np.array([]), trt.PluginFieldType.CHAR)
-            ]
-        )
+        self.field_names = trt.PluginFieldCollection([])
 
     def create_plugin(self, name, fc, phase):
         return RPNPlugin()
@@ -216,9 +213,15 @@ if __name__ == "__main__":
     precision = np.float32
     image_shape = [1, 3, 800, 800]
     f1_shape = [1, 256, 50, 50]
+    f2_shape = [1, 512, 25, 25]
+    f3_shape = [1, 1024, 20, 20]
     batch_size = 1
 
-    features = [torch.randn(f1_shape)]
+    features = [
+        torch.randn(f1_shape), 
+        torch.randn(f2_shape),
+        torch.randn(f3_shape)
+    ]
 
     # Register plugin creator
     plg_registry = trt.get_plugin_registry()
@@ -265,7 +268,6 @@ if __name__ == "__main__":
         anchors.append(torch.cat(all_anchors, dim=0))
 
 
-
     anchors = np.array(anchors).astype(numpy_dtype)
     objectness = np.array(objectness).astype(numpy_dtype)
     pred_bbox_delta = np.array(pred_bbox_delta).astype(numpy_dtype)
@@ -273,7 +275,6 @@ if __name__ == "__main__":
     image = torch.randn(image_shape).numpy().astype(numpy_dtype)
     fmaps = torch.randn(f1_shape).numpy().astype(numpy_dtype)
     
-
     print("=" * 20)
     print("BEFORE ENQUEUE")
     print("image shape:", image.shape, "values:", image.reshape(-1)[:5])
@@ -283,8 +284,6 @@ if __name__ == "__main__":
     print("\nOBJECTNESS first 5 (flattened):", objectness[0][0][0][0].reshape(-1)[:5])
     print("\nPRED_BBOX_DELTAS first 5 (flattened):", pred_bbox_delta[0][0][0][0].reshape(-1)[:5])
     print("=" * 20)
-    # exit(0)
-
 
     # Populate network
     inputImage = network.add_input(name="image", dtype=trt.DataType.FLOAT, shape=trt.Dims(image_shape))
@@ -298,14 +297,11 @@ if __name__ == "__main__":
                                 inputBbox], 
                                 [], rpn_plugin)
 
-
     out.get_output(0).name = "boxes"
     out.get_output(1).name = "active_rows"
     network.mark_output(tensor=out.get_output(0))
     network.mark_output(tensor=out.get_output(1))
     build_engine = engine_from_network((builder, network), CreateConfig(fp16= True if precision == np.float16 else False))
-
-
     
     with TrtRunner(build_engine, "trt_runner")as runner:
         outputs = runner.infer({"image": image, 
