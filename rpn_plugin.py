@@ -212,7 +212,10 @@ if __name__ == "__main__":
 
     precision = np.float32
     image_shape = [1, 3, 800, 800]
-    f1_shape = [1, 256, 50, 50]
+    f1_shape = [1, 256, 200, 200]
+    f2_shape = [1, 256, 100, 100]
+    f3_shape = [1, 256, 25, 25]
+    f4_shape = [1, 256, 13, 13]
 
     # Register plugin creator
     plg_registry = trt.get_plugin_registry()
@@ -240,15 +243,39 @@ if __name__ == "__main__":
 
     # Populate network
     inputImage = network.add_input(name="image", dtype=trt.DataType.FLOAT, shape=trt.Dims(image_shape))
-    inputFmaps = network.add_input(name="fmaps", dtype=trt.DataType.FLOAT, shape=trt.Dims(f1_shape))
+    inputFmap1 = network.add_input(name="f1", dtype=trt.DataType.FLOAT, shape=trt.Dims(f1_shape))
+    inputFmap2 = network.add_input(name="f2", dtype=trt.DataType.FLOAT, shape=trt.Dims(f2_shape))
+    inputFmap3 = network.add_input(name="f3", dtype=trt.DataType.FLOAT, shape=trt.Dims(f3_shape))
+    inputFmap4 = network.add_input(name="f4", dtype=trt.DataType.FLOAT, shape=trt.Dims(f4_shape))
     
     # layers outputs
-    anchor_out = network.add_plugin_v3([inputImage, inputFmaps], [], anchor_plugin)
-    rpn_head_out = network.add_plugin_v3([inputFmaps], [], rpn_head_plugin)
+    anchor_out = network.add_plugin_v3(
+        [
+            inputImage, inputFmap1,
+            inputFmap2, inputFmap3,
+            inputFmap4
+        ],
+        [],
+        anchor_plugin
+    )
+
+    rpn_head_out = network.add_plugin_v3(
+        [
+            inputFmap1, inputFmap2, 
+            inputFmap3, inputFmap4
+        ],
+        [], 
+        rpn_head_plugin
+    )
 
     out = network.add_plugin_v3(
-        [inputImage, inputFmaps, anchor_out.get_output(0), 
-        rpn_head_out.get_output(0), rpn_head_out.get_output(1)], 
+        [
+            inputImage,
+            inputFmap1, inputFmap2, 
+            inputFmap3, inputFmap4,
+            anchor_out.get_output(0), 
+            rpn_head_out.get_output(0), rpn_head_out.get_output(1)
+        ], 
         [], rpn_plugin
     )
 
@@ -259,11 +286,18 @@ if __name__ == "__main__":
     build_engine = engine_from_network((builder, network), CreateConfig(fp16= True if precision == np.float16 else False))
 
     image = torch.randn(image_shape).numpy().astype(numpy_dtype)
-    fmaps = torch.randn(f1_shape).numpy().astype(numpy_dtype)
+    map1 = torch.randn(f1_shape).numpy().astype(numpy_dtype)
+    map2 = torch.randn(f2_shape).numpy().astype(numpy_dtype)
+    map3 = torch.randn(f3_shape).numpy().astype(numpy_dtype)
+    map4 = torch.randn(f4_shape).numpy().astype(numpy_dtype)
     
     with TrtRunner(build_engine, "trt_runner")as runner:
-        outputs = runner.infer({"image": image, 
-                                "fmaps":fmaps})
+        outputs = runner.infer(
+            {
+                "image": image, "f1":map1, 
+                "f2":map2, "f3":map3, "f4":map4
+            }
+        )
         print(outputs['boxes'])
         print(outputs['active_rows'])
         print("OUTPUT:", outputs['boxes'].shape)

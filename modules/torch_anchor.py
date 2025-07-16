@@ -27,8 +27,11 @@ def anchor_forward(image, feature_maps: list[torch.Tensor], SIZES, ASPECT_RATIOS
         base_anchors = torch.stack([-ws, -hs, ws, hs], dim=1) / 2
         cell_anchors.append(base_anchors.round())
 
+    # print(f"Grid sizes: {grid_sizes.shape}, Strides: {strides.shape}, Cell anchors: {cell_anchors.shape}")
+    print(f"Grid sizes: {len(grid_sizes)}, Strides: {len(strides)}, Cell anchors: {len(cell_anchors)}")
     anchors_all = []
     for size, stride, base_anchors in zip(grid_sizes, strides, cell_anchors):
+        print(f"Generating anchors for feature map size: {size}, stride: {stride}")
         gh, gw = size
         sh, sw = stride
         shifts_x = torch.arange(0, gw, dtype=torch.int32, device=device) * sw
@@ -38,8 +41,26 @@ def anchor_forward(image, feature_maps: list[torch.Tensor], SIZES, ASPECT_RATIOS
         shift_y = shift_y.reshape(-1)
         shifts = torch.stack((shift_x, shift_y, shift_x, shift_y), dim=1)
         anchors = (shifts[:, None, :] + base_anchors[None, :, :]).reshape(-1, 4)
+        print(f"Anchors shape for feature map {size}: {anchors.shape}")
         anchors_all.append(anchors)
 
     # Return anchors for batch[0] only (ONNX doesn’t support loops over batch)
     return torch.cat(anchors_all, dim=0)
 
+if __name__ == "__main__":
+    # Example usage
+    image = torch.randn(1, 3, 800, 800)  # Example image tensor
+    feature_maps = [
+        torch.randn(1, 256, 200, 200), 
+        torch.randn(1, 256, 100, 100),
+        torch.randn(1, 256, 50, 50),
+        torch.randn(1, 256, 25, 25), 
+        torch.randn(1, 256, 13, 13), 
+    ]
+    # feature_maps = [torch.randn(1, 256, 50, 50)]
+
+    SIZES = ((32,), (64,), (128,), (256,), (512,))
+    ASPECT_RATIOS = ((0.5, 1.0, 2.0),) * len(SIZES)
+
+    anchors = anchor_forward(image, feature_maps, SIZES, ASPECT_RATIOS)
+    print("Generated anchors shape:", anchors.shape)
