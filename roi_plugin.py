@@ -73,8 +73,8 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
     # Return true if plugin supports the format and datatype for the input/output indexed by pos.
     def supports_format_combination(self, pos, in_out, num_inputs):
         # print("Support Combination")
-        print("pos", pos, "format", in_out[pos].desc.format, "type", in_out[pos].desc.type)
-        return num_inputs == 6
+        # print("pos", pos, "format", in_out[pos].desc.format, "type", in_out[pos].desc.type)
+        return num_inputs == 7
         # cout <<"pos " << pos << " format " << (int)inOut[pos].format << " type " << (int)inOut[pos].type << endl
 
     # The executed function when the plugin is called
@@ -85,6 +85,11 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
 
         img_dtype = trt.nptype(input_desc[0].type) # imgs
         roi_dtype = trt.nptype(output_desc[0].type) # imgs
+
+        print("Len Input Descs:", len(input_desc))
+        print("Len Output Descs:", len(output_desc))
+        print("Len Inputs:", len(inputs))
+        print("Len Outputs:", len(outputs))
 
         # images
         images_mem = cp.cuda.UnownedMemory(
@@ -101,8 +106,8 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         )
 
         map_2 = cp.cuda.UnownedMemory(
-            outputs[2],
-            volume(output_desc[2].dims) * cp.dtype(roi_dtype).itemsize,
+            inputs[2],
+            volume(input_desc[2].dims) * cp.dtype(roi_dtype).itemsize,
             self,
         )
 
@@ -129,6 +134,7 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
             volume(input_desc[6].dims) * cp.dtype(img_dtype).itemsize,
             self
         )
+        print("Device Mem For Input Allocated.")
 
         # cls reg
         cls_reg_mem = cp.cuda.UnownedMemory(
@@ -142,7 +148,7 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
             volume(output_desc[1].dims) * cp.dtype(roi_dtype).itemsize,
             self,
         )
-        print("Device Mem Allocated.")
+        print("Device Mem For Output Allocated.")
 
         images_ptr = cp.cuda.MemoryPointer(images_mem, 0)
         map_1_ptr = cp.cuda.MemoryPointer(map_1, 0)
@@ -168,13 +174,13 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         bbox_predictor_d = cp.ndarray((volume(output_desc[1].dims)), dtype=img_dtype, memptr=box_predict_ptr)
         print("Arrays populated.")
 
-        images_t = torch.as_tensor(imgs_d, device="cuda")
-        maps1_t = torch.as_tensor(maps1_d, device="cuda")
-        maps2_t = torch.as_tensor(maps2_d, device="cuda")
-        maps3_t = torch.as_tensor(maps3_d, device="cuda")
-        maps4_t = torch.as_tensor(maps4_d, device="cuda")
-        maps5_t = torch.as_tensor(maps5_d, device="cuda")
-        boxes_t = torch.as_tensor(boxes_d, device="cuda")
+        images_t = torch.as_tensor(imgs_d, device="cuda").squeeze(0)
+        maps1_t = torch.as_tensor(maps1_d, device="cuda").squeeze(0)
+        maps2_t = torch.as_tensor(maps2_d, device="cuda").squeeze(0)
+        maps3_t = torch.as_tensor(maps3_d, device="cuda").squeeze(0)
+        maps4_t = torch.as_tensor(maps4_d, device="cuda").squeeze(0)
+        maps5_t = torch.as_tensor(maps5_d, device="cuda").squeeze(0)
+        boxes_t = torch.as_tensor(boxes_d, device="cuda").squeeze(0)
         print("Torch populated.")
         
         print("[enqueue] BOXES:", boxes_t.shape, "values:", boxes_t.view(-1)[:5])
@@ -234,11 +240,7 @@ class RPNHeadPluginCreator(trt.IPluginCreatorV3One):
         self.name = mscale_roi_plugin_name
         self.plugin_namespace = ""
         self.plugin_version = "1"
-        self.field_names = trt.PluginFieldCollection(
-            [
-                # trt.PluginField("backend", np.array([]), trt.PluginFieldType.CHAR)
-            ]
-        )
+        self.field_names = trt.PluginFieldCollection([])
 
     def create_plugin(self, name, fc, phase):
         return MScaleRoIPlugin()
@@ -360,9 +362,5 @@ if __name__ == "__main__":
         })
         print("cls.shape", out['cls_reg'].shape)
         print("bbox_pred.shape", out['bbox_pred'].shape)
-        # print(out['roi'][0][:10])
-        # print(out['bbox_pred'].shape)
-        # print("Outputs Shape:", outputs.shape)
-        # print("Outputs:", outputs[:10])
-
-  
+        print("cls[0][:5]", out['cls_reg'][0][:5])
+        print("bbox_pred[0][:5]", out['bbox_pred'][0][:5])
