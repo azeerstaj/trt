@@ -1,4 +1,3 @@
-import random
 from trt_utils import *
 from anchor_gen_plugin import AnchorGenPluginCreator, anchor_plugin_name, numpy_dtype
 from rpn_head_plugin import RPNHeadPluginCreator, rpn_head_plugin_name
@@ -6,8 +5,6 @@ from modules.rpn_forward import rpn_forward
 from collections import namedtuple
 
 torch.manual_seed(0)
-np.random.seed(0)
-random.seed(0)
 
 rpn_plugin_name = "RPNPlugin"
 n_outputs = 2
@@ -40,15 +37,7 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
     # inputs : shape of inputs
     def get_output_shapes(self, inputs, shape_inputs, exprBuilder):
         output_dims = [trt.DimsExprs(2), trt.DimsExprs(1)]
-        # max_rpn_size = exprBuilder.declare_size_tensor(1,
-        #                                                 exprBuilder.constant(500),
-        #                                                 exprBuilder.constant(1000))
-
         max_props = exprBuilder.constant(self.max_proposals)
-
-        # max_props = exprBuilder.operation(trt.DimensionOperation.PROD,
-        #                                   max_props,
-        #                                   exprBuilder.constant(4))
 
         output_dims[0][0] = max_props
         output_dims[0][1] = exprBuilder.constant(4)
@@ -73,7 +62,7 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
     # Return true if plugin supports the format and datatype for the input/output indexed by pos.
     def supports_format_combination(self, pos, in_out, num_inputs):
         # print("Support Combination")
-        return num_inputs == 5 # imgs, fmaps, anchors, 
+        return num_inputs == 12 # imgs, fmaps, anchors, 
 
     # The executed function when the plugin is called
     # workspace : the allowed gpu mem for this plugin
@@ -87,26 +76,51 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         print("Active Rows dtype:", active_rows_dtype)
         print("Img Dims:", input_desc[0].dims)
         print("Active Rows dims:", output_desc[1].dims)
+        print("Input Len", len(inputs), "Output Len:", len(outputs))
 
         imgs_mem = cp.cuda.UnownedMemory(
             inputs[0], volume(input_desc[0].dims) * cp.dtype(img_dtype).itemsize, self
         )
 
-        fmaps_mem = cp.cuda.UnownedMemory(
+        anchor_mem = cp.cuda.UnownedMemory(
             inputs[1], volume(input_desc[1].dims) * cp.dtype(img_dtype).itemsize, self
         )
-        
-        anchors_mem = cp.cuda.UnownedMemory(
-            inputs[2], volume(input_desc[2].dims) * cp.dtype(img_dtype).itemsize, self,
+
+        cls_logits_1_mem = cp.cuda.UnownedMemory(
+            inputs[2], volume(input_desc[2].dims) * cp.dtype(img_dtype).itemsize, self
+        )
+        bbox_reg_1_mem = cp.cuda.UnownedMemory(
+            inputs[3], volume(input_desc[3].dims) * cp.dtype(img_dtype).itemsize, self
         )
 
-        objectness_mem = cp.cuda.UnownedMemory(
-            inputs[3], volume(input_desc[3].dims) * cp.dtype(img_dtype).itemsize, self,
+        cls_logits_2_mem = cp.cuda.UnownedMemory(
+            inputs[4], volume(input_desc[4].dims) * cp.dtype(img_dtype).itemsize, self
+        )
+        bbox_reg_2_mem = cp.cuda.UnownedMemory(
+            inputs[5], volume(input_desc[5].dims) * cp.dtype(img_dtype).itemsize, self
         )
 
-        proposals_mem = cp.cuda.UnownedMemory(
-            inputs[4], volume(input_desc[4].dims) * cp.dtype(img_dtype).itemsize, self,
+        cls_logits_3_mem = cp.cuda.UnownedMemory(
+            inputs[6], volume(input_desc[6].dims) * cp.dtype(img_dtype).itemsize, self
         )
+        bbox_reg_3_mem = cp.cuda.UnownedMemory(
+            inputs[7], volume(input_desc[7].dims) * cp.dtype(img_dtype).itemsize, self
+        )
+
+        cls_logits_4_mem = cp.cuda.UnownedMemory(
+            inputs[8], volume(input_desc[8].dims) * cp.dtype(img_dtype).itemsize, self
+        )
+        bbox_reg_4_mem = cp.cuda.UnownedMemory(
+            inputs[9], volume(input_desc[9].dims) * cp.dtype(img_dtype).itemsize, self
+        )
+
+        cls_logits_5_mem = cp.cuda.UnownedMemory(
+            inputs[10], volume(input_desc[10].dims) * cp.dtype(img_dtype).itemsize, self
+        )
+        bbox_reg_5_mem = cp.cuda.UnownedMemory(
+            inputs[11], volume(input_desc[11].dims) * cp.dtype(img_dtype).itemsize, self
+        )
+
 
         boxes_mem = cp.cuda.UnownedMemory(
             outputs[0], volume(output_desc[0].dims) * cp.dtype(img_dtype).itemsize, self,
@@ -118,19 +132,35 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
         print("Device Mem Allocated.")
 
         imgs_ptr = cp.cuda.MemoryPointer(imgs_mem, 0)
-        fmaps_ptr = cp.cuda.MemoryPointer(fmaps_mem, 0)
-        anchors_ptr = cp.cuda.MemoryPointer(anchors_mem, 0)
-        objectness_ptr = cp.cuda.MemoryPointer(objectness_mem, 0)
-        proposals_ptr = cp.cuda.MemoryPointer(proposals_mem, 0)
+        anchor_ptr = cp.cuda.MemoryPointer(anchor_mem, 0)
+
+        cls_logits_1_ptr = cp.cuda.MemoryPointer(cls_logits_1_mem, 0)
+        bbox_reg_1_ptr = cp.cuda.MemoryPointer(bbox_reg_1_mem, 0)
+        cls_logits_2_ptr = cp.cuda.MemoryPointer(cls_logits_2_mem, 0)
+        bbox_reg_2_ptr = cp.cuda.MemoryPointer(bbox_reg_2_mem, 0)
+        cls_logits_3_ptr = cp.cuda.MemoryPointer(cls_logits_3_mem, 0)
+        bbox_reg_3_ptr = cp.cuda.MemoryPointer(bbox_reg_3_mem, 0)
+        cls_logits_4_ptr = cp.cuda.MemoryPointer(cls_logits_4_mem, 0)
+        bbox_reg_4_ptr = cp.cuda.MemoryPointer(bbox_reg_4_mem, 0)
+        cls_logits_5_ptr = cp.cuda.MemoryPointer(cls_logits_5_mem, 0)
+        bbox_reg_5_ptr = cp.cuda.MemoryPointer(bbox_reg_5_mem, 0)
+
         boxes_ptr = cp.cuda.MemoryPointer(boxes_mem, 0)
         active_rows_ptr = cp.cuda.MemoryPointer(active_rows_mem, 0)
         print("Pointers Initialized.")
 
         imgs_d = cp.ndarray(tuple(input_desc[0].dims), dtype=img_dtype, memptr=imgs_ptr)
-        fmaps_d = cp.ndarray(tuple(input_desc[1].dims), dtype=img_dtype, memptr=fmaps_ptr)
-        anchors_d = cp.ndarray(tuple(input_desc[2].dims), dtype=img_dtype, memptr=anchors_ptr)
-        objectness_d = cp.ndarray(tuple(input_desc[3].dims), dtype=img_dtype, memptr=objectness_ptr)
-        proposals_d = cp.ndarray(tuple(input_desc[4].dims), dtype=img_dtype, memptr=proposals_ptr)
+        anchor_d = cp.ndarray(tuple(input_desc[1].dims), dtype=img_dtype, memptr=anchor_ptr)
+        cls_logits_1_d = cp.ndarray(tuple(input_desc[2].dims), dtype=img_dtype, memptr=cls_logits_1_ptr)
+        bbox_reg_1_d = cp.ndarray(tuple(input_desc[3].dims), dtype=img_dtype, memptr=bbox_reg_1_ptr)
+        cls_logits_2_d = cp.ndarray(tuple(input_desc[4].dims), dtype=img_dtype, memptr=cls_logits_2_ptr)
+        bbox_reg_2_d = cp.ndarray(tuple(input_desc[5].dims), dtype=img_dtype, memptr=bbox_reg_2_ptr)
+        cls_logits_3_d = cp.ndarray(tuple(input_desc[6].dims), dtype=img_dtype, memptr=cls_logits_3_ptr)
+        bbox_reg_3_d = cp.ndarray(tuple(input_desc[7].dims), dtype=img_dtype, memptr=bbox_reg_3_ptr)
+        cls_logits_4_d = cp.ndarray(tuple(input_desc[8].dims), dtype=img_dtype, memptr=cls_logits_4_ptr)
+        bbox_reg_4_d = cp.ndarray(tuple(input_desc[9].dims), dtype=img_dtype, memptr=bbox_reg_4_ptr)
+        cls_logits_5_d = cp.ndarray(tuple(input_desc[10].dims), dtype=img_dtype, memptr=cls_logits_5_ptr)
+        bbox_reg_5_d = cp.ndarray(tuple(input_desc[11].dims), dtype=img_dtype, memptr=bbox_reg_5_ptr)
        
         boxes_d = cp.ndarray((volume(output_desc[0].dims)), dtype=img_dtype, memptr=boxes_ptr)
         active_rows_d = cp.ndarray((volume(output_desc[1].dims)), dtype=active_rows_dtype, memptr=active_rows_ptr)
@@ -138,23 +168,40 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
 
         # Simulated Objectness & Proposals
         imgs_t = torch.as_tensor(imgs_d, device="cuda")
-        fmaps_t = torch.as_tensor(fmaps_d, device="cuda")
-        anchors_t = torch.as_tensor(anchors_d, device="cuda")#.squeeze(0)
-        objectness_t = torch.as_tensor(objectness_d, device="cuda").unsqueeze(0)
-        proposals_t = torch.as_tensor(proposals_d, device="cuda").unsqueeze(0)
+        anchor_t = torch.as_tensor(anchor_d, device="cuda")
+        cls_logits_1_t = torch.as_tensor(cls_logits_1_d, device="cuda")
+        bbox_reg_1_t = torch.as_tensor(bbox_reg_1_d, device="cuda")
+        cls_logits_2_t = torch.as_tensor(cls_logits_2_d, device="cuda")
+        bbox_reg_2_t = torch.as_tensor(bbox_reg_2_d, device="cuda")
+        cls_logits_3_t = torch.as_tensor(cls_logits_3_d, device="cuda")
+        bbox_reg_3_t = torch.as_tensor(bbox_reg_3_d, device="cuda")
+        cls_logits_4_t = torch.as_tensor(cls_logits_4_d, device="cuda")
+        bbox_reg_4_t = torch.as_tensor(bbox_reg_4_d, device="cuda")
+        cls_logits_5_t = torch.as_tensor(cls_logits_5_d, device="cuda")
+        bbox_reg_5_t = torch.as_tensor(bbox_reg_5_d, device="cuda")
         print("Torch populated.")
 
         print("[enqueue] imgs shape:", imgs_t.shape, "values:", imgs_t.view(-1)[:5])
-        print("[enqueue] fmaps shape:", fmaps_t.shape, "values:", fmaps_t.view(-1)[:5])
-        print("[enqueue] anchors shape:", anchors_t.shape, "values:", anchors_t.view(-1)[:5])
-        print("[enqueue] objectness shape:", objectness_t.shape, "values:", objectness_t.view(-1)[:5])
-        print("[enqueue] proposals shape:", proposals_t.shape, "values:", proposals_t.view(-1)[:5])
+        # print("[enqueue] fmaps shape:", fmaps_t.shape, "values:", fmaps_t.view(-1)[:5])
+        # print("[enqueue] anchors shape:", anchors_t.shape, "values:", anchors_t.view(-1)[:5])
+        # print("[enqueue] objectness shape:", objectness_t.shape, "values:", objectness_t.view(-1)[:5])
+        # print("[enqueue] proposals shape:", proposals_t.shape, "values:", proposals_t.view(-1)[:5])
 
         img_list = ImageList(imgs_t, [imgs_t.shape[-2:]])
-        out = rpn_forward(img_list, fmaps_t,
-                          [anchors_t], 
-                          [objectness_t],
-                          [proposals_t])
+        out = rpn_forward(
+            img_list,
+            [anchor_t], 
+            [cls_logits_1_t, 
+            cls_logits_2_t,
+            cls_logits_3_t,
+            cls_logits_4_t,
+            cls_logits_5_t],
+            [bbox_reg_1_t,
+            bbox_reg_2_t,
+            bbox_reg_3_t,
+            bbox_reg_4_t,
+            bbox_reg_5_t],
+        )
 
         print("len(output):", len(out))
         print("Output Shape:", out[0].shape)  # e.g., (N, 4)
@@ -214,8 +261,9 @@ if __name__ == "__main__":
     image_shape = [1, 3, 800, 800]
     f1_shape = [1, 256, 200, 200]
     f2_shape = [1, 256, 100, 100]
-    f3_shape = [1, 256, 25, 25]
-    f4_shape = [1, 256, 13, 13]
+    f3_shape = [1, 256, 50, 50]
+    f4_shape = [1, 256, 25, 25]
+    f5_shape = [1, 256, 13, 13]
 
     # Register plugin creator
     plg_registry = trt.get_plugin_registry()
@@ -247,13 +295,14 @@ if __name__ == "__main__":
     inputFmap2 = network.add_input(name="f2", dtype=trt.DataType.FLOAT, shape=trt.Dims(f2_shape))
     inputFmap3 = network.add_input(name="f3", dtype=trt.DataType.FLOAT, shape=trt.Dims(f3_shape))
     inputFmap4 = network.add_input(name="f4", dtype=trt.DataType.FLOAT, shape=trt.Dims(f4_shape))
-    
+    inputFmap5 = network.add_input(name="f5", dtype=trt.DataType.FLOAT, shape=trt.Dims(f5_shape))
+
     # layers outputs
     anchor_out = network.add_plugin_v3(
         [
             inputImage, inputFmap1,
             inputFmap2, inputFmap3,
-            inputFmap4
+            inputFmap4, inputFmap5 
         ],
         [],
         anchor_plugin
@@ -262,7 +311,8 @@ if __name__ == "__main__":
     rpn_head_out = network.add_plugin_v3(
         [
             inputFmap1, inputFmap2, 
-            inputFmap3, inputFmap4
+            inputFmap3, inputFmap4,
+            inputFmap5
         ],
         [], 
         rpn_head_plugin
@@ -271,10 +321,13 @@ if __name__ == "__main__":
     out = network.add_plugin_v3(
         [
             inputImage,
-            inputFmap1, inputFmap2, 
-            inputFmap3, inputFmap4,
             anchor_out.get_output(0), 
-            rpn_head_out.get_output(0), rpn_head_out.get_output(1)
+            # cls_logits                # bbox_pred
+            rpn_head_out.get_output(0), rpn_head_out.get_output(1), # map1 outputs
+            rpn_head_out.get_output(2), rpn_head_out.get_output(3), # map2 outputs
+            rpn_head_out.get_output(4), rpn_head_out.get_output(5), # map3 outputs
+            rpn_head_out.get_output(6), rpn_head_out.get_output(7), # map4 outputs
+            rpn_head_out.get_output(8), rpn_head_out.get_output(9), # map5 outputs
         ], 
         [], rpn_plugin
     )
@@ -283,23 +336,28 @@ if __name__ == "__main__":
     out.get_output(1).name = "active_rows"
     network.mark_output(tensor=out.get_output(0))
     network.mark_output(tensor=out.get_output(1))
-    build_engine = engine_from_network((builder, network), CreateConfig(fp16= True if precision == np.float16 else False))
+    build_engine = engine_from_network(
+        (builder, network), 
+        CreateConfig(fp16= True if precision == np.float16 else False)
+    )
 
     image = torch.randn(image_shape).numpy().astype(numpy_dtype)
     map1 = torch.randn(f1_shape).numpy().astype(numpy_dtype)
     map2 = torch.randn(f2_shape).numpy().astype(numpy_dtype)
     map3 = torch.randn(f3_shape).numpy().astype(numpy_dtype)
     map4 = torch.randn(f4_shape).numpy().astype(numpy_dtype)
+    map5 = torch.randn(f5_shape).numpy().astype(numpy_dtype)
     
     with TrtRunner(build_engine, "trt_runner")as runner:
         outputs = runner.infer(
             {
                 "image": image, "f1":map1, 
-                "f2":map2, "f3":map3, "f4":map4
+                "f2":map2, "f3":map3,
+                "f4":map4, "f5":map5
             }
         )
-        print(outputs['boxes'])
-        print(outputs['active_rows'])
-        print("OUTPUT:", outputs['boxes'].shape)
+        for k in outputs.keys():
+            print(f"Outputs[{k}].shape:", outputs[k].shape)
+            # print(f"Outputs[{k}]:", outputs[k][0][0][:10])
 
     checkCudaErrors(cuda.cuCtxDestroy(cudaCtx))

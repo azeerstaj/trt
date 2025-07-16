@@ -8,49 +8,8 @@ from .torchvision_utils import (
     batched_nms
 )
 from collections import namedtuple
-import numpy as np
 
 torch.manual_seed(0)
-np.random.seed(0)
-random.seed(0)
-
-# def rpn_head_forward(features):
-#     for feature in features:
-#         t = self.conv(feature)
-#         logits.append(self.cls_logits(t))
-#         bbox_reg.append(self.bbox_pred(t))
-#     return logits, bbox_reg
-
-"""
-def estimate_rpn_output_shape(features: dict, num_anchors_per_location: int, batch_size: int, post_nms_top_n: int):
-    feature_shapes = [feat.shape for feat in features.values()]
-    total_anchors = sum(num_anchors_per_location * H * W for (_, _, H, W) in feature_shapes)
-    max_boxes_per_image = post_nms_top_n
-    return (batch_size, max_boxes_per_image, 4)
-"""
-
-def estimate_rpn_proposal_counts(features, A: int = 3, pre_nms_top_n: int = 1000, post_nms_top_n: int = 1000) -> dict:
-    feature_shapes = [feat.shape for feat in features]
-    
-    total_raw_anchors = sum(A * H * W for _, _, H, W in feature_shapes)
-    approx_topk_total = sum(min(pre_nms_top_n, A * H * W) for _, _, H, W in feature_shapes)
-
-    # Estimate drops
-    after_score_thresh = int(approx_topk_total * 0.5)   # e.g., 50% filtered out
-    after_nms = int(after_score_thresh * 0.5)           # e.g., 50% drop due to NMS
-
-    expected = min(after_nms, post_nms_top_n)
-    max_proposals = post_nms_top_n
-    min_proposals = 0  # Worst case
-
-    return {
-        "min": min_proposals,
-        "expected": expected,
-        "max": max_proposals,
-        "raw_anchors": total_raw_anchors,
-        "topk_before_nms": approx_topk_total,
-    }
- 
 
 def permute_and_flatten(layer: Tensor, N: int, A: int, C: int, H: int, W: int) -> Tensor:
     print(f"[permute_and_flatten] input: {layer.shape}")
@@ -343,9 +302,18 @@ def filter_proposals(
         print(f"[filter_proposals] after NMS: boxes={boxes.shape}")
     return final_boxes, final_scores
 
-def rpn_forward(images, features, anchors, objectness, pred_bbox_deltas):
-    print(f"[rpn_forward] features: {len(features)}, images: {len(images.image_sizes)}")
+def rpn_forward(images, anchors, objectness, pred_bbox_deltas):
+    if objectness[0].ndim == 3:
+        objectness = [o.unsqueeze(0) for o in objectness]
+    if pred_bbox_deltas[0].ndim == 3:
+        pred_bbox_deltas = [p.unsqueeze(0) for p in pred_bbox_deltas]
+    print(f"[rpn_forward] len(images): {len(images.image_sizes)}")
+    print(f"[rpn_forward] len(objectness): {len(objectness)}")
+    print(f"[rpn_forward] len(pred_bbox_deltas): {len(pred_bbox_deltas)}")
+    print(f"[rpn_forward] objectness[0].shape: {objectness[0].shape}")
+    print(f"[rpn_forward] pred_bbox_deltas[0].shape: {pred_bbox_deltas[0].shape}")
     num_anchors_per_level_shape_tensors = [o[0].shape for o in objectness]
+    print(f"[rpn_forward] num_anchors_per_level_shape_tensors: {num_anchors_per_level_shape_tensors}")
     num_anchors_per_level = [s[0] * s[1] * s[2] for s in num_anchors_per_level_shape_tensors]
 
     objectness, pred_bbox_deltas = concat_box_prediction_layers(objectness, pred_bbox_deltas)
@@ -374,8 +342,15 @@ if __name__ == "__main__":
         torch.randn(batch_size, 256, 50, 50),
         torch.randn(batch_size, 512, 25, 25),
         torch.randn(batch_size, 1024, 10, 10),
+        torch.randn(batch_size, 1024, 10, 10),
     ]
 
+    # features = [
+    #     torch.randn(256, 50, 50),
+    #     torch.randn(512, 25, 25),
+    #     torch.randn(1024, 10, 10),
+    #     torch.randn(1024, 10, 10),
+    # ]
     # Assume 3 anchors per spatial location
     num_anchors = 3
     objectness = []
@@ -412,12 +387,6 @@ if __name__ == "__main__":
     print("\nPRED_BBOX_DELTAS:\n", pred_bbox_deltas[0][0][0][0][:5])
 
     # Run RPN forward
-    proposals = rpn_forward(images, features, anchors, objectness, pred_bbox_deltas)
-    estimates = estimate_rpn_proposal_counts(features)   
-    print(estimates)
+    proposals = rpn_forward(images, anchors, objectness, pred_bbox_deltas)
 
     print("Total Proposals:", len(proposals))
-
-    # for i, (boxes_per_image) in enumerate(proposals):
-        # print(f"Image {i}: {len(boxes_per_image)} proposals")
-        # print(boxes_per_image[:5])  # show top 5 proposals

@@ -16,8 +16,10 @@ def rpn_head_forward(x: list[Tensor], weights):
         bbox_pred = F.conv2d(input=t, weight=weights['rpn.head.bbox_pred.weight'],
                              bias=weights['rpn.head.bbox_pred.bias'])
 
-        logits.append(cls_logits.squeeze().cpu())
-        bbox_reg.append(bbox_pred.squeeze().cpu())
+        # logits.append(cls_logits.squeeze().cpu())
+        # bbox_reg.append(bbox_pred.squeeze().cpu())
+        logits.append(cls_logits.cpu())
+        bbox_reg.append(bbox_pred.cpu())
 
     return logits, bbox_reg
 

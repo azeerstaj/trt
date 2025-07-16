@@ -1,11 +1,6 @@
 from trt_utils import *
 from modules.torch_anchor import anchor_forward
 
-# kernel_path = "modules/cuAnchor.cuh"
-
-# with open(kernel_path, "r") as f:
-#     template_kernel = f.read()
-
 anchor_plugin_name = "AnchorGenPlugin"
 n_outputs = 1
 numpy_dtype = np.float32
@@ -34,7 +29,7 @@ class AnchorGenPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
     # Return Data Type
     def get_output_data_types(self, input_types):
         # print("Output dtypes")
-        return [trt.DataType.FLOAT]
+        return [trt.DataType.FLOAT]#, trt.DataType.FLOAT]
 
     # inputs : shape of inputs
     def get_output_shapes(self, inputs, shape_inputs, exprBuilder):
@@ -50,6 +45,7 @@ class AnchorGenPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
             
         output_dims[0][0] = exprBuilder.constant(total_output_anchors)
         output_dims[0][1] = exprBuilder.constant(4)
+        print("Done calculating output dims")
         return output_dims
 
     # plugin input params, custom backend?
@@ -114,7 +110,7 @@ class AnchorGenPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
             volume(output_desc[0].dims) * cp.dtype(img_dtype).itemsize,
             self,
         )
-        print("Device Mem Allocated.")
+        print("[anchor_gen] Device Mem Allocated.")
 
         imgs_ptr = cp.cuda.MemoryPointer(imgs_mem, 0)
         map1_ptr = cp.cuda.MemoryPointer(map1_mem, 0)
@@ -123,7 +119,7 @@ class AnchorGenPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         map4_ptr = cp.cuda.MemoryPointer(map4_mem, 0)
         map5_ptr = cp.cuda.MemoryPointer(map5_mem, 0)
         anchors_ptr = cp.cuda.MemoryPointer(anchors_mem, 0)
-        print("Pointers Initialized.")
+        print("[anchor_gen] Pointers Initialized.")
 
         imgs_d = cp.ndarray(tuple(input_desc[0].dims), dtype=img_dtype, memptr=imgs_ptr)
         map1_d = cp.ndarray(tuple(input_desc[1].dims), dtype=img_dtype, memptr=map1_ptr)
@@ -132,7 +128,7 @@ class AnchorGenPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         map4_d = cp.ndarray(tuple(input_desc[4].dims), dtype=img_dtype, memptr=map4_ptr)
         map5_d = cp.ndarray(tuple(input_desc[5].dims), dtype=img_dtype, memptr=map5_ptr)
         anchors_d = cp.ndarray(tuple(output_desc[0].dims), dtype=img_dtype, memptr=anchors_ptr)
-        print("Arrays populated.")
+        print("[anchor_gen] Arrays populated.")
 
         imgs_t = torch.as_tensor(imgs_d, device="cuda")
         map1_t = torch.as_tensor(map1_d, device="cuda")
@@ -140,7 +136,7 @@ class AnchorGenPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         map3_t = torch.as_tensor(map3_d, device="cuda")
         map4_t = torch.as_tensor(map4_d, device="cuda")
         map5_t = torch.as_tensor(map5_d, device="cuda")
-        print("Torch populated.")
+        print("[anchor_gen] Torch populated.")
 
         out = anchor_forward(
             imgs_t, 
@@ -171,11 +167,7 @@ class AnchorGenPluginCreator(trt.IPluginCreatorV3One):
         self.name = anchor_plugin_name
         self.plugin_namespace = ""
         self.plugin_version = "1"
-        self.field_names = trt.PluginFieldCollection(
-            [
-                # trt.PluginField("backend", np.array([]), trt.PluginFieldType.CHAR)
-            ]
-        )
+        self.field_names = trt.PluginFieldCollection([])
 
     def create_plugin(self, name, fc, phase):
         return AnchorGenPlugin()

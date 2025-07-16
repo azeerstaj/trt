@@ -157,7 +157,6 @@ class RPNHeadPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, 
         bbox_pred_5_mem = cp.cuda.UnownedMemory(
             outputs[9], volume(output_desc[9].dims) * cp.dtype(img_dtype).itemsize, self
         )
-
         print("Device Mem Allocated.")
 
         map1_ptr = cp.cuda.MemoryPointer(map1_mem, 0)
@@ -233,31 +232,31 @@ class RPNHeadPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, 
 
         print("1st:")
         print(f" - logits[0].shape:{logits[0].shape}, bbox_reg[0].shape:{bbox_reg[0].shape}")
-        print(f" - value:{logits[0][0][0][:5]}, value:{bbox_reg[0][0][0][:5]}")
+        # print(f" - value:{logits[0][0][0][:5]}, value:{bbox_reg[0][0][0][:5]}")
         cp.copyto(cls_logits_1_d, cp.reshape(cp.asarray(logits[0]), (-1,)))
         cp.copyto(bbox_pred_1_d, cp.reshape(cp.asarray(bbox_reg[0]), (-1,)))
 
         print("2nd:")
         print(f" - logits[1].shape:{logits[1].shape}, bbox_reg[1].shape:{bbox_reg[1].shape}")
-        print(f" - value:{logits[1][0][0][:5]}, value:{bbox_reg[1][0][0][:5]}")
+        # print(f" - value:{logits[1][0][0][:5]}, value:{bbox_reg[1][0][0][:5]}")
         cp.copyto(cls_logits_2_d, cp.reshape(cp.asarray(logits[1]), (-1,)))
         cp.copyto(bbox_pred_2_d, cp.reshape(cp.asarray(bbox_reg[1]), (-1,)))
 
         print("3rd:")
         print(f" - logits[2].shape:{logits[2].shape}, bbox_reg[2].shape:{bbox_reg[2].shape}")
-        print(f" - value:{logits[2][0][0][:5]}, value:{bbox_reg[2][0][0][:5]}")
+        # print(f" - value:{logits[2][0][0][:5]}, value:{bbox_reg[2][0][0][:5]}")
         cp.copyto(cls_logits_3_d, cp.reshape(cp.asarray(logits[2]), (-1,)))
         cp.copyto(bbox_pred_3_d, cp.reshape(cp.asarray(bbox_reg[2]), (-1,)))
 
         print("4th:")
         print(f" - logits[3].shape:{logits[3].shape}, bbox_reg[3].shape:{bbox_reg[3].shape}")
-        print(f" - value:{logits[3][0][0][:5]}, value:{bbox_reg[3][0][0][:5]}")
+        # print(f" - value:{logits[3][0][0][:5]}, value:{bbox_reg[3][0][0][:5]}")
         cp.copyto(cls_logits_4_d, cp.reshape(cp.asarray(logits[3]), (-1,)))
         cp.copyto(bbox_pred_4_d, cp.reshape(cp.asarray(bbox_reg[3]), (-1,)))
 
         print("5th:")
         print(f" - logits[4].shape:{logits[4].shape}, bbox_reg[4].shape:{bbox_reg[4].shape}")
-        print(f" - value:{logits[4][0][0][:5]}, value:{bbox_reg[4][0][0][:5]}")
+        # print(f" - value:{logits[4][0][0][:5]}, value:{bbox_reg[4][0][0][:5]}")
         cp.copyto(cls_logits_5_d, cp.reshape(cp.asarray(logits[4]), (-1,)))
         cp.copyto(bbox_pred_5_d, cp.reshape(cp.asarray(bbox_reg[4]), (-1,)))
 
