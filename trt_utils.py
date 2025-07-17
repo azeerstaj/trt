@@ -12,6 +12,8 @@ from polygraphy.backend.trt import (
     TrtRunner,
     create_network,
     engine_from_network,
+    save_engine,
+    engine_from_path,
 )
 
 from polygraphy import mod

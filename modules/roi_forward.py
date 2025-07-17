@@ -105,8 +105,8 @@ def roi_align(
     return output
 
 
-def multiscale_roi_align_forward(features: dict, boxes: list[torch.Tensor], image_sizes: list[tuple[int, int]],
-                                 output_size: int = 7, sampling_ratio: int = 2) -> torch.Tensor:
+def multiscale_roi_align_forward(features: dict, boxes: torch.Tensor, image_sizes: list[tuple[int, int]],
+                                 output_size: int = 7, sampling_ratio: int = 2, active_rows:int=3) -> torch.Tensor:
     """
     A simplified manual implementation of MultiScaleRoIAlign.
 
@@ -122,21 +122,16 @@ def multiscale_roi_align_forward(features: dict, boxes: list[torch.Tensor], imag
         Tensor of shape [total_boxes, C, output_size, output_size]
     """
     assert len(features) > 0
+    if active_rows <= 0:
+        active_rows = 10
     
-
-    print("BOXES:", boxes[0].shape)
-    for i,m in enumerate(features.values()):
-        print(f"[multiscale_roi_align] map_shape[{i}]:", m.shape)
-
-    for i,b in enumerate(boxes):
-        print(f"[multiscale_roi_align] boxes_t[{i}]:", b.shape)
-
+    print(f"[multiscale_roi_align] boxes:", boxes.shape)
+    print(f"[multiscale_roi_align] active rows:", active_rows)
     for i,x in enumerate(image_sizes):
         print(f"[multiscale_roi_align] images_sizes[{i}]:", x)
 
-    all_features = []
     all_levels = list(features.keys())
-    all_boxes = boxes[0]  # batch size = 1 assumed
+    all_boxes = boxes[:active_rows,:] # batch size = 1 assumed
     print(f"[multiscale_roi_align] all_boxes.shape:", all_boxes.shape)
 
     # Compute scale of each box (sqrt(area))
@@ -163,6 +158,7 @@ def multiscale_roi_align_forward(features: dict, boxes: list[torch.Tensor], imag
                            sampling_ratio=sampling_ratio, aligned=True)
         roi_outputs.append((idx_in_level, output))
         print(f"[multiscale_roi_align] output.shape:", output.shape)
+        print(f"[multiscale_roi_align] output.view(-1)[:10]:", output.view(-1)[:10])
 
     # Stitch results back in correct order
     output = torch.zeros((len(all_boxes), features[all_levels[0]].shape[1], output_size, output_size),

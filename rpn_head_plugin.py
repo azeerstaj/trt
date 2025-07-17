@@ -340,10 +340,20 @@ if __name__ == "__main__":
         network.mark_output(tensor=out.get_output(i * 2))
         network.mark_output(tensor=out.get_output(i * 2 + 1))
 
-    build_engine = engine_from_network(
-        (builder, network), 
-        CreateConfig(fp16= True if precision == np.float16 else False)
-    )
+    # build_engine = engine_from_path("engines/rpn_head_1.engine")
+    # print("Engine loaded.")
+
+    load = False
+    if load:
+        build_engine = engine_from_path("engines/roi_1.engine")
+        print("Engine loaded.")
+    else:
+        build_engine = engine_from_network((builder, network), CreateConfig(fp16=True if precision == np.float16 else False))
+        save_engine(build_engine, "engines/roi_1.engine")
+        print("Engine built and saved.")
+
+
+    # save_engine(build_engine, "engines/rpn_head_1.engine")
 
     map1 = np.random.random(f1_shape).astype(numpy_dtype)
     map2 = np.random.random(f2_shape).astype(numpy_dtype)

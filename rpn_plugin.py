@@ -32,7 +32,7 @@ class RPNPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.
     # Return Data Type
     def get_output_data_types(self, input_types):
         # print("Output dtypes")
-        return [trt.DataType.FLOAT, trt.DataType.FLOAT]
+        return [trt.DataType.FLOAT, trt.DataType.INT32]
 
     # inputs : shape of inputs
     def get_output_shapes(self, inputs, shape_inputs, exprBuilder):
@@ -336,10 +336,15 @@ if __name__ == "__main__":
     out.get_output(1).name = "active_rows"
     network.mark_output(tensor=out.get_output(0))
     network.mark_output(tensor=out.get_output(1))
-    build_engine = engine_from_network(
-        (builder, network), 
-        CreateConfig(fp16= True if precision == np.float16 else False)
-    )
+
+    load = True
+    if load:
+        build_engine = engine_from_path("engines/rpn_1.engine")
+        print("Engine loaded.")
+    else:
+        build_engine = engine_from_network((builder, network), CreateConfig(fp16=True if precision == np.float16 else False))
+        save_engine(build_engine, "engines/rpn_1.engine")
+        print("Engine built and saved.")
 
     image = torch.randn(image_shape).numpy().astype(numpy_dtype)
     map1 = torch.randn(f1_shape).numpy().astype(numpy_dtype)
@@ -358,6 +363,8 @@ if __name__ == "__main__":
         )
         for k in outputs.keys():
             print(f"Outputs[{k}].shape:", outputs[k].shape)
+            print(f"Outputs[{k}].dtype:", outputs[k].dtype)
+            print(f"type(Outputs[{k}]):", type(outputs[k]))
             # print(f"Outputs[{k}]:", outputs[k][0][0][:10])
 
     checkCudaErrors(cuda.cuCtxDestroy(cudaCtx))

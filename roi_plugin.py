@@ -6,8 +6,8 @@ from modules.roi_forward import (
 )
 
 # Multi-Scale RoI Plugin.
-mscale_roi_plugin_name = "MScaleRoIPlugin"
-n_outputs = 2
+roi_plugin_name = "MScaleRoIPlugin"
+n_outputs = 3
 numpy_dtype = np.float32
 
 class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild, trt.IPluginV3OneRuntime):
@@ -19,12 +19,13 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
 
         self.num_outputs = n_outputs
         self.plugin_namespace = ""
-        self.plugin_name = mscale_roi_plugin_name
+        self.plugin_name = roi_plugin_name
         self.plugin_version = "1"
         self.cuDevice = None
         self.output_size = 7
         self.out_cls_score = 91
         self.out_bbox_pred = 364
+        self.max_proposals = 1000
         self.weights = torch.load("weights/fasterrcnn1.pt", weights_only=True, map_location='cuda')
 
     def get_capability_interface(self, type):
@@ -34,7 +35,7 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
     # Return Data Type
     def get_output_data_types(self, input_types):
         # print("Output dtypes")
-        return [trt.DataType.FLOAT, trt.DataType.FLOAT]
+        return [trt.DataType.FLOAT, trt.DataType.FLOAT, trt.DataType.INT32]
 
     # inputs : shape of inputs
     def get_output_shapes(self, inputs, shape_inputs, exprBuilder):
@@ -46,13 +47,15 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         # outputs #1 : C
         # outputs #2 : self.output_size
         # outputs #3 : self.output_size
-        output_dims = [trt.DimsExprs(2), trt.DimsExprs(2)]#, trt.DimsExprs(4)]
+        output_dims = [trt.DimsExprs(2), trt.DimsExprs(2), trt.DimsExprs(1)]#, trt.DimsExprs(4)]
 
-        output_dims[0][0] = exprBuilder.constant(1)
-        output_dims[1][0] = exprBuilder.constant(1)
+        output_dims[0][0] = exprBuilder.constant(self.max_proposals)
+        output_dims[1][0] = exprBuilder.constant(self.max_proposals)
         output_dims[0][1] = exprBuilder.constant(self.out_cls_score) # cls
-        output_dims[1][1] = exprBuilder.constant(self.out_bbox_pred)       # bbox
+        output_dims[1][1] = exprBuilder.constant(self.out_bbox_pred) # bbox
+        output_dims[2][0] = exprBuilder.constant(1)                  # bbox
 
+        # print("\n\n\n\noutput shapes:", output_dims[0])
         return output_dims
 
     # plugin input params, custom backend?
@@ -74,7 +77,7 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
     def supports_format_combination(self, pos, in_out, num_inputs):
         # print("Support Combination")
         # print("pos", pos, "format", in_out[pos].desc.format, "type", in_out[pos].desc.type)
-        return num_inputs == 7
+        return num_inputs == 8
         # cout <<"pos " << pos << " format " << (int)inOut[pos].format << " type " << (int)inOut[pos].type << endl
 
     # The executed function when the plugin is called
@@ -84,6 +87,7 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
     def enqueue(self, input_desc, output_desc, inputs, outputs, workspace, stream):
 
         img_dtype = trt.nptype(input_desc[0].type) # imgs
+        active_rows_dtype = np.int32 # active_rows
         roi_dtype = trt.nptype(output_desc[0].type) # imgs
 
         print("Len Input Descs:", len(input_desc))
@@ -134,6 +138,12 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
             volume(input_desc[6].dims) * cp.dtype(img_dtype).itemsize,
             self
         )
+
+        active_rows = cp.cuda.UnownedMemory(
+            inputs[7],
+            volume(input_desc[7].dims) * cp.dtype(active_rows_dtype).itemsize,
+            self
+        )
         print("Device Mem For Input Allocated.")
 
         # cls reg
@@ -148,6 +158,12 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
             volume(output_desc[1].dims) * cp.dtype(roi_dtype).itemsize,
             self,
         )
+
+        active_rows_out_mem = cp.cuda.UnownedMemory(
+            outputs[2],
+            volume(output_desc[2].dims) * cp.dtype(active_rows_dtype).itemsize,
+            self,
+        )
         print("Device Mem For Output Allocated.")
 
         images_ptr = cp.cuda.MemoryPointer(images_mem, 0)
@@ -157,21 +173,25 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         map_4_ptr = cp.cuda.MemoryPointer(map_4, 0)
         map_5_ptr = cp.cuda.MemoryPointer(map_5, 0)
         boxes_ptr = cp.cuda.MemoryPointer(boxes, 0)
+        active_rows_ptr = cp.cuda.MemoryPointer(active_rows, 0)
 
         cls_reg_ptr = cp.cuda.MemoryPointer(cls_reg_mem, 0)
         box_predict_ptr = cp.cuda.MemoryPointer(bbox_predict_mem, 0)
+        active_rows_out_ptr = cp.cuda.MemoryPointer(active_rows_out_mem, 0)
         print("Pointers Initialized.")
 
-        imgs_d = cp.ndarray(tuple(input_desc[0].dims), dtype=img_dtype, memptr=images_ptr)
+        imgs_d  = cp.ndarray(tuple(input_desc[0].dims), dtype=img_dtype, memptr=images_ptr)
         maps1_d = cp.ndarray(tuple(input_desc[1].dims), dtype=img_dtype, memptr=map_1_ptr)
         maps2_d = cp.ndarray(tuple(input_desc[2].dims), dtype=img_dtype, memptr=map_2_ptr)
         maps3_d = cp.ndarray(tuple(input_desc[3].dims), dtype=img_dtype, memptr=map_3_ptr)
         maps4_d = cp.ndarray(tuple(input_desc[4].dims), dtype=img_dtype, memptr=map_4_ptr)
         maps5_d = cp.ndarray(tuple(input_desc[5].dims), dtype=img_dtype, memptr=map_5_ptr)
         boxes_d = cp.ndarray(tuple(input_desc[6].dims), dtype=img_dtype, memptr=boxes_ptr)
+        active_rows_d = cp.ndarray(tuple(input_desc[7].dims), dtype=active_rows_dtype, memptr=active_rows_ptr)
 
         cls_reg_d = cp.ndarray((volume(output_desc[0].dims)), dtype=img_dtype, memptr=cls_reg_ptr)
         bbox_predictor_d = cp.ndarray((volume(output_desc[1].dims)), dtype=img_dtype, memptr=box_predict_ptr)
+        active_rows_out_d = cp.ndarray((volume(output_desc[2].dims)), dtype=active_rows_dtype, memptr=active_rows_out_ptr)
         print("Arrays populated.")
 
         images_t = torch.as_tensor(imgs_d, device="cuda").squeeze(0)
@@ -181,16 +201,9 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         maps4_t = torch.as_tensor(maps4_d, device="cuda").squeeze(0)
         maps5_t = torch.as_tensor(maps5_d, device="cuda").squeeze(0)
         boxes_t = torch.as_tensor(boxes_d, device="cuda").squeeze(0)
+        active_rows_t = torch.as_tensor(active_rows_d, device="cuda")
         print("Torch populated.")
-        
-        print("[enqueue] BOXES:", boxes_t.shape, "values:", boxes_t.view(-1)[:5])
-        print("[enqueue]  IMGS:", images_t.shape, "values:", images_t.view(-1)[:5])
-        print("[enqueue] MAPS1:", maps1_d.shape, "values:", maps1_t.view(-1)[:5])
-        print("[enqueue] MAPS2:", maps2_d.shape, "values:", maps2_t.view(-1)[:5])
-        print("[enqueue] MAPS2:", maps2_d.shape, "values:", maps2_t.view(-1)[:5])
-        print("[enqueue] MAPS3:", maps3_d.shape, "values:", maps3_t.view(-1)[:5])
-        print("[enqueue] MAPS4:", maps4_d.shape, "values:", maps4_t.view(-1)[:5])
-        print("[enqueue] MAPS5:", maps5_d.shape, "values:", maps5_t.view(-1)[:5])
+        print("[enqueue] ACTIVE_ANCHORS:", active_rows_t)
 
         # Postprocessing
         fmap_num = 0
@@ -200,25 +213,44 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
             fmaps_t_dict[f"f_{fmap_num}"] = m.unsqueeze(0)
             fmap_num += 1
 
-        boxes_t = [b.cuda().unsqueeze(0) for b in boxes_t]
         image_sizes = [(i.shape[-2], i.shape[-1]) for i in images_t]
         box_features = multiscale_roi_align_forward(
             boxes=boxes_t, 
             features=fmaps_t_dict, 
             image_sizes=image_sizes,
-            output_size=self.output_size
-        )#.cpu().numpy()
+            output_size=self.output_size,
+            active_rows=active_rows_t.item()
+        )
 
-        # box_features
+        print("[enqueue] box_features.shape:", box_features.shape)
         box_features = box_head_forward(box_features, self.weights)
         class_logits, box_regression = box_predictor_forward(box_features, self.weights)
+        class_logits_np = class_logits.cpu().numpy()
+        box_regression_np = box_regression.cpu().numpy()
 
-        print("Final box_features Size:", box_features.shape)
-        print("Class logits Size:", class_logits.shape)
-        print("Box regression Size:", box_regression.shape)
+        max_proposals = self.max_proposals
+        num_proposals = class_logits.shape[0]
 
-        cp.copyto(cls_reg_d, cp.reshape(cp.asarray(class_logits), (-1,)))
-        cp.copyto(bbox_predictor_d, cp.reshape(cp.asarray(box_regression), (-1,)))
+        if num_proposals < max_proposals:
+            pad = np.zeros((max_proposals - num_proposals, class_logits_np.shape[1]), dtype=class_logits_np.dtype)
+            class_logits_np = np.concatenate([class_logits_np, pad], axis=0)
+
+            pad = np.zeros((max_proposals - num_proposals, box_regression_np.shape[1]), dtype=box_regression_np.dtype)
+            box_regression_np = np.concatenate([box_regression_np, pad], axis=0)
+        elif num_proposals > max_proposals:
+            class_logits_np = class_logits_np[:max_proposals,:]
+            box_regression_np = box_regression_np[:max_proposals,:]
+
+        print("class_logits_np.shape:", class_logits_np.shape)
+        print("box_regression_np.shape:", box_regression_np.shape)
+        print(f"{output_desc[0].dims}, {output_desc[1].dims}")
+
+        cp.copyto(cls_reg_d, cp.reshape(cp.asarray(class_logits_np), (-1,)))
+        cp.copyto(bbox_predictor_d, cp.reshape(cp.asarray(box_regression_np), (-1,)))
+        cp.copyto(active_rows_out_d, cp.reshape(cp.asarray(active_rows_t.cpu().numpy().astype(active_rows_dtype)), (-1,)))
+
+        # cp.copyto(cls_reg_d, cp.reshape(cp.asarray(class_logits), (-1,)))
+        # cp.copyto(bbox_predictor_d, cp.reshape(cp.asarray(box_regression), (-1,)))
         return 0
 
 
@@ -234,10 +266,10 @@ class MScaleRoIPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         return cloned_plugin
 
 
-class RPNHeadPluginCreator(trt.IPluginCreatorV3One):
+class MScaleRoIPluginCreator(trt.IPluginCreatorV3One):
     def __init__(self):
         trt.IPluginCreatorV3One.__init__(self)
-        self.name = mscale_roi_plugin_name
+        self.name = roi_plugin_name
         self.plugin_namespace = ""
         self.plugin_version = "1"
         self.field_names = trt.PluginFieldCollection([])
@@ -261,30 +293,22 @@ if __name__ == "__main__":
     f3_shape = [1, 256, 50, 50]
     f4_shape = [1, 256, 25, 25]
     f5_shape = [1, 256, 13, 13]
-
-    boxes = torch.tensor(
-        [
-            [50, 60, 200, 220], 
-            [300, 300, 450, 450], 
-            [100, 100, 300, 350],
-            [100, 100, 300, 350]
-        ], 
-        dtype=torch.float
-    )
+    boxes_shape = [1000, 4]  # Simulated boxes
+    active_rows = [1]
 
     # Register plugin creator
     plg_registry = trt.get_plugin_registry()
-    my_plugin_creator = RPNHeadPluginCreator()
+    my_plugin_creator = MScaleRoIPluginCreator()
     plg_registry.register_creator(my_plugin_creator, "")
 
     # Create plugin object
     builder, network = create_network()
-    plg_creator = plg_registry.get_creator(mscale_roi_plugin_name, "1", "")
+    plg_creator = plg_registry.get_creator(roi_plugin_name, "1", "")
     
     plugin_fields_list = []
 
     pfc = trt.PluginFieldCollection(plugin_fields_list)
-    plugin = plg_creator.create_plugin(mscale_roi_plugin_name, pfc, trt.TensorRTPhase.BUILD)
+    plugin = plg_creator.create_plugin(roi_plugin_name, pfc, trt.TensorRTPhase.BUILD)
 
     # Populate network
     # These are gonna be used to get size
@@ -327,30 +351,48 @@ if __name__ == "__main__":
     inputBoxes = network.add_input(
         name="boxes", 
         dtype=trt.DataType.FLOAT, 
-        shape=trt.Dims(boxes.shape)
+        shape=trt.Dims(boxes_shape)
+    )
+
+    inputActiveRows = network.add_input(
+        name="active_rows",
+        dtype=trt.DataType.INT32, 
+        shape=trt.Dims([1])
     )
 
     out = network.add_plugin_v3(
         [
             inputImages,
             map1, map2, map3, map4, map5,
-            inputBoxes, 
+            inputBoxes, inputActiveRows
         ], [], plugin
     )
 
     out.get_output(0).name = "cls_reg"
     out.get_output(1).name = "bbox_pred"
+    out.get_output(2).name = "active_rows_out"
     network.mark_output(tensor=out.get_output(0))
     network.mark_output(tensor=out.get_output(1))
+    network.mark_output(tensor=out.get_output(2))
 
-    build_engine = engine_from_network((builder, network), CreateConfig(fp16=True if precision == np.float16 else False))
+    load = True
+    if load:
+        build_engine = engine_from_path("engines/roi_1.engine")
+        print("Engine loaded.")
+    else:
+        build_engine = engine_from_network((builder, network), CreateConfig(fp16=True if precision == np.float16 else False))
+        save_engine(build_engine, "engines/roi_1.engine")
+        print("Engine built and saved.")
+
     in_map1 = np.random.random(f1_shape).astype(numpy_dtype)
     in_map2 = np.random.random(f2_shape).astype(numpy_dtype)
     in_map3 = np.random.random(f3_shape).astype(numpy_dtype)
     in_map4 = np.random.random(f4_shape).astype(numpy_dtype)
     in_map5 = np.random.random(f5_shape).astype(numpy_dtype)
     in_images = np.random.random(image_shape).astype(numpy_dtype)
-    boxes = boxes.cpu().numpy().astype(numpy_dtype)
+    in_boxes = np.random.random(boxes_shape).astype(numpy_dtype)
+    in_active_rows = np.array([np.random.randint(low=0, high=1000)]).astype(np.int32)
+    print("Simulated Active Rows:", in_active_rows)
 
     with TrtRunner(build_engine, "trt_runner")as runner:
         out = runner.infer({
@@ -358,9 +400,11 @@ if __name__ == "__main__":
             "map1":in_map1, "map2":in_map2, 
             "map3":in_map3, "map4":in_map4, 
             "map5":in_map5, 
-            "boxes":boxes
+            "boxes":in_boxes, "active_rows":in_active_rows
         })
-        print("cls.shape", out['cls_reg'].shape)
-        print("bbox_pred.shape", out['bbox_pred'].shape)
-        print("cls[0][:5]", out['cls_reg'][0][:5])
-        print("bbox_pred[0][:5]", out['bbox_pred'][0][:5])
+        print("Output  Keys:", out.keys())
+        for k in out.keys():
+            print(f"Output {k} Shape:", out[k].shape)
+            # print(f"Output {k} Values:", out[k][0][0][:10], "\n\n")
+        
+        print("Output Active Rows Out:", out["active_rows_out"])
