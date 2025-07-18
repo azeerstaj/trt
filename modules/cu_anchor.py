@@ -2,7 +2,6 @@ import os
 import torch
 from torch.utils.cpp_extension import load_inline
 import numpy as np
-import torch.nn as nn
 
 # Read CUDA kernel from file
 def read_cuda_kernel(filename):

@@ -1,50 +1,75 @@
-import torch
-from modules.cu_anchor_single import generate_anchors_single_pytorch
-from modules.cu_anchor import generate_anchors_pytorch
-from modules.numpy_anchor import anchor_forward_numpy
+from trt_utils import *
+from anchor_gen_plugin import AnchorGenPluginCreator, anchor_plugin_name
+from rpn_head_plugin import RPNHeadPluginCreator, rpn_head_plugin_name
+from rpn_plugin import RPNPluginCreator, rpn_plugin_name
+from roi_plugin import MScaleRoIPluginCreator, roi_plugin_name
 
+torch.manual_seed(0)
+numpy_dtype = np.float32
 
 if __name__ == "__main__":
-    image_shape = (1, 3, 800, 600)
+    # Initialize CUDA Driver API
+    err, = cuda.cuInit(0)
+    # Retrieve handle for device 0
+    err, cuDevice = cuda.cuDeviceGet(0)
+    # Create context
+    _, cudaCtx = cuda.cuCtxCreate(0, cuDevice)
 
-    dummy_f4 = torch.randn(1, 256, 20, 20)
-    # feature_maps = [dummy_f4]#dummy_f2, dummy_f3]
+    precision = np.float32
+    image_shape = [1, 3, 800, 800]
+    f1_shape = [1, 256, 200, 200]
+    f2_shape = [1, 256, 100, 100]
+    f3_shape = [1, 256, 50, 50]
+    f4_shape = [1, 256, 25, 25]
+    f5_shape = [1, 256, 13, 13]
 
-    SIZES = ((32,),)
-    ASPECT_RATIOS = ((0.5,),)
+    # Register plugin creator
+    plg_registry = trt.get_plugin_registry()
+    rpn_plugin_creator = RPNPluginCreator()
+    rpn_head_plugin_creator = RPNHeadPluginCreator()
+    anchor_plugin_creator = AnchorGenPluginCreator()
+    roi_plugin_creator = MScaleRoIPluginCreator()
 
-    # Prepare input for numpy version
-    image_height, image_width = image_shape[-2], image_shape[-1]
-    feature_map_shapes = [dummy_f4.shape[-2:]]  # [(100, 100), (50, 50), (25, 25)]
+    plg_registry.register_creator(rpn_plugin_creator, "")
+    plg_registry.register_creator(rpn_head_plugin_creator, "")
+    plg_registry.register_creator(anchor_plugin_creator, "")
+    plg_registry.register_creator(roi_plugin_creator, "")
 
-    # Call the numpy anchor generator
-    anchors_np = anchor_forward_numpy(
-        image_height=image_height,
-        image_width=image_width,
-        feature_map_shapes=[dummy_f4.shape[-2:]],
-        sizes=SIZES,
-        aspect_ratios=ASPECT_RATIOS
-    )
+    rpn_plg_creator = plg_registry.get_creator(rpn_plugin_name, "1", "")
+    rpn_head_plg_creator = plg_registry.get_creator(rpn_head_plugin_name, "1", "")
+    anchor_plg_creator = plg_registry.get_creator(anchor_plugin_name, "1", "")
+    roi_plg_creator = plg_registry.get_creator(roi_plugin_name, "1", "")
+    
+    plugin_fields_list = []
+    pfc = trt.PluginFieldCollection(plugin_fields_list)
 
-    anchors_1 = generate_anchors_single_pytorch(image_height,
-                                                image_width,
-                                                dummy_f4.shape[-2],
-                                                dummy_f4.shape[-1],
-                                                SIZES,
-                                                ASPECT_RATIOS)
+    # Plugins
+    rpn_plugin = rpn_plg_creator.create_plugin(rpn_plugin_name, pfc, trt.TensorRTPhase.BUILD)
+    rpn_head_plugin = rpn_head_plg_creator.create_plugin(rpn_head_plugin_name, pfc, trt.TensorRTPhase.BUILD)
+    anchor_plugin = anchor_plg_creator.create_plugin(anchor_plugin_name, pfc, trt.TensorRTPhase.BUILD)
+    roi_plugin = roi_plg_creator.create_plugin(roi_plugin_name, pfc, trt.TensorRTPhase.BUILD)
 
+    build_engine = engine_from_path("engines/frcnn_noback_1.engine")
+    print("Engine loaded.")
+    
+    image = torch.randn(image_shape).numpy().astype(numpy_dtype)
+    map1 = torch.randn(f1_shape).numpy().astype(numpy_dtype)
+    map2 = torch.randn(f2_shape).numpy().astype(numpy_dtype)
+    map3 = torch.randn(f3_shape).numpy().astype(numpy_dtype)
+    map4 = torch.randn(f4_shape).numpy().astype(numpy_dtype)
+    map5 = torch.randn(f5_shape).numpy().astype(numpy_dtype)
 
-    anchors_2 = generate_anchors_pytorch(image_height,
-                                        image_width,
-                                        feature_map_shapes,
-                                        SIZES,
-                                        ASPECT_RATIOS)
+    with TrtRunner(build_engine, "trt_runner") as runner:
+        outputs = runner.infer(
+            {
+                "image": image, "f1":map1, 
+                "f2":map2, "f3":map3,
+                "f4":map4, "f5":map5
+            }
+        )
+        for k in outputs.keys():
+            print(f"Outputs[{k}].shape:", outputs[k].shape)
+            # print(f"Outputs[{k}]:", outputs[k][0][0][:10])
+        print(f"Outputs[active_rows_out]:", outputs["active_rows_out"])
 
-    anchors_ref = torch.tensor(anchors_np, dtype=anchors_1.dtype, device=anchors_1.device)
-
-    print(f"First 5 anchors:\n{anchors_1[:5]}")
-    print(f"First 5 anchors:\n{anchors_2[:5]}")
-    print(f"First 5 anchors:\n{anchors_ref[:5]}")
-
-    print("Single and NumPy is the same !" if torch.allclose(anchors_ref, anchors_1) else "Single and NumPy is not the Same ...")
-    print("Multi and NumPy is the same !" if torch.allclose(anchors_ref, anchors_2) else "Single and NumPy is not the Same ...")
+    checkCudaErrors(cuda.cuCtxDestroy(cudaCtx))
