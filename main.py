@@ -7,6 +7,9 @@ from roi_plugin import MScaleRoIPluginCreator, roi_plugin_name
 torch.manual_seed(0)
 numpy_dtype = np.float32
 
+RANDOM_TENSORS = False
+TENSOR_TEST_PATH = "test_tensors/"
+
 if __name__ == "__main__":
     # Initialize CUDA Driver API
     err, = cuda.cuInit(0)
@@ -16,13 +19,6 @@ if __name__ == "__main__":
     _, cudaCtx = cuda.cuCtxCreate(0, cuDevice)
 
     precision = np.float32
-    image_shape = [1, 3, 800, 800]
-    f1_shape = [1, 256, 200, 200]
-    f2_shape = [1, 256, 100, 100]
-    f3_shape = [1, 256, 50, 50]
-    f4_shape = [1, 256, 25, 25]
-    f5_shape = [1, 256, 13, 13]
-
     # Register plugin creator
     plg_registry = trt.get_plugin_registry()
     rpn_plugin_creator = RPNPluginCreator()
@@ -52,12 +48,27 @@ if __name__ == "__main__":
     build_engine = engine_from_path("engines/frcnn_noback_1.engine")
     print("Engine loaded.")
     
-    image = torch.randn(image_shape).numpy().astype(numpy_dtype)
-    map1 = torch.randn(f1_shape).numpy().astype(numpy_dtype)
-    map2 = torch.randn(f2_shape).numpy().astype(numpy_dtype)
-    map3 = torch.randn(f3_shape).numpy().astype(numpy_dtype)
-    map4 = torch.randn(f4_shape).numpy().astype(numpy_dtype)
-    map5 = torch.randn(f5_shape).numpy().astype(numpy_dtype)
+    if RANDOM_TENSORS:
+        image_shape = [1, 3, 800, 800]
+        f1_shape = [1, 256, 200, 200]
+        f2_shape = [1, 256, 100, 100]
+        f3_shape = [1, 256, 50, 50]
+        f4_shape = [1, 256, 25, 25]
+        f5_shape = [1, 256, 13, 13]
+
+        image = torch.randn(image_shape).numpy().astype(numpy_dtype)
+        map1 = torch.randn(f1_shape).numpy().astype(numpy_dtype)
+        map2 = torch.randn(f2_shape).numpy().astype(numpy_dtype)
+        map3 = torch.randn(f3_shape).numpy().astype(numpy_dtype)
+        map4 = torch.randn(f4_shape).numpy().astype(numpy_dtype)
+        map5 = torch.randn(f5_shape).numpy().astype(numpy_dtype)
+    else:
+        image = torch.load(TENSOR_TEST_PATH + "tensor_image.pt").detach().numpy().astype(numpy_dtype)
+        map1 = torch.load(TENSOR_TEST_PATH + "tensor_fmap_0.pt").detach().numpy().astype(numpy_dtype)
+        map2 = torch.load(TENSOR_TEST_PATH + "tensor_fmap_1.pt").detach().numpy().astype(numpy_dtype)
+        map3 = torch.load(TENSOR_TEST_PATH + "tensor_fmap_2.pt").detach().numpy().astype(numpy_dtype)
+        map4 = torch.load(TENSOR_TEST_PATH + "tensor_fmap_3.pt").detach().numpy().astype(numpy_dtype)
+        map5 = torch.load(TENSOR_TEST_PATH + "tensor_fmap_4.pt").detach().numpy().astype(numpy_dtype)
 
     with TrtRunner(build_engine, "trt_runner") as runner:
         outputs = runner.infer(
@@ -69,7 +80,8 @@ if __name__ == "__main__":
         )
         for k in outputs.keys():
             print(f"Outputs[{k}].shape:", outputs[k].shape)
-            # print(f"Outputs[{k}]:", outputs[k][0][0][:10])
-        print(f"Outputs[active_rows_out]:", outputs["active_rows_out"])
+            print(f"Outputs[{k}]:", outputs[k][0][:10])
+
+        # print(f"Outputs[active_rows_out]:", outputs["active_rows_out"])
 
     checkCudaErrors(cuda.cuCtxDestroy(cudaCtx))

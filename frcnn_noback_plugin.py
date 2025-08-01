@@ -16,12 +16,12 @@ if __name__ == "__main__":
     _, cudaCtx = cuda.cuCtxCreate(0, cuDevice)
 
     precision = np.float32
-    image_shape = [1, 3, 800, 800]
-    f1_shape = [1, 256, 200, 200]
-    f2_shape = [1, 256, 100, 100]
-    f3_shape = [1, 256, 50, 50]
-    f4_shape = [1, 256, 25, 25]
-    f5_shape = [1, 256, 13, 13]
+    image_shape = [1, 3, 480, 640]
+    f1_shape = [1, 256, 120, 160]
+    f2_shape = [1, 256, 60, 80]
+    f3_shape = [1, 256, 30, 40]
+    f4_shape = [1, 256, 15, 20]
+    f5_shape = [1, 256, 8, 10]
 
     # Register plugin creator
     plg_registry = trt.get_plugin_registry()
@@ -113,7 +113,7 @@ if __name__ == "__main__":
     network.mark_output(tensor=roi_out.get_output(1))
     network.mark_output(tensor=roi_out.get_output(2))
 
-    load = True
+    load = False
     if load:
         build_engine = engine_from_path("engines/frcnn_noback_1.engine")
         print("Engine loaded.")

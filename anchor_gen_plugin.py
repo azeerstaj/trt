@@ -17,7 +17,7 @@ class AnchorGenPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
         self.plugin_name = anchor_plugin_name
         self.plugin_version = "1"
         self.cuDevice = None
-        self.map_sizes = [[200, 200], [100, 100], [50, 50], [25, 25], [13, 13]]
+        self.map_sizes = [[120, 160], [60, 80], [30, 40], [15, 20], [8, 10]]
         self.sizes = ((32,), (64,), (128,), (256,), (512,))
         self.aspect_ratios = ((0.5, 1.0, 2.0),) * len(self.sizes)
 
@@ -143,7 +143,9 @@ class AnchorGenPlugin(trt.IPluginV3, trt.IPluginV3OneCore, trt.IPluginV3OneBuild
             [map1_t, map2_t, map3_t, map4_t, map5_t],
             self.sizes, self.aspect_ratios
         )#.view(-1)
+        print("[anchor_gen] output_desc:", output_desc[0].dims)
         cp.copyto(anchors_d, cp.asarray(out))
+
         # cp.copyto(anchors_d, cp.reshape(cp.asarray(out), (-1,)))
 
         return 0
